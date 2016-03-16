@@ -71,7 +71,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
         if options.verbose:
             print "...Handling item ", item_name, \
                   " of type 'dictionary' at level ", level, \
-                  " in upper folder ", upper_folder, " keys =", keys 
+                  " in parent folder ", upper_folder, " keys =", keys 
         if len(keys) > 0:
             for k in sorted(keys):
                 if not re.search('__', k) and not k[0]=='_':
@@ -80,7 +80,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
                                level+1, item_name, options)
     elif item_type(item_value) == "array": 
         if options.verbose:
-             print "...Handling item ", item_name, " in upper folder ", upper_folder, \
+             print "...Handling item ", item_name, " in parent folder ", upper_folder, \
                    " item type 'array' of shape ", item_value.shape, \
                    "at level ", level, " item_value=", item_value
              if item_value.shape[0] > 0:
@@ -88,7 +88,12 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
         len_shape = len(item_value.shape)
         itype = get_array_type(item_value )
         idtype = item_value.dtype
+#       if not item_type(item_value[0]) == "string":
         ishape = item_value.shape
+#       else:
+#           ishape = tuple([len(i) for i in item_value])
+#       print "ishape=", ishape
+
 #       if not itype == 'None':
         if options.verbose:
             print "   array len=", item_name.__len__(), \
@@ -97,7 +102,12 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
             if options.verbose:
                 print "item_name=", item_name, " ishape=", ishape, " idtype=", idtype.type
             if len_shape > 0:
-                dset = hdf5_folder.create_dataset(item_name, ishape, dtype=idtype, data=item_value )
+#               dset = hdf5_folder.create_dataset(item_name, ishape, dtype=idtype, data=item_value )
+                try:
+                    dset = hdf5_folder.create_dataset(item_name, ishape, data=item_value )
+                except:
+                    data = numpy.array([a.encode('utf8') for a in item_value]) # explicitly encoding
+                    dset = hdf5_folder.create_dataset(item_name, ishape, dtype=data.dtype, data=data)
             else: # variable-length string
                 dt = h5py.special_dtype(vlen=str)
                 dset = hdf5_folder.create_dataset(item_name, (1,1), dtype=dt, data=str(item_value ))
@@ -145,25 +155,27 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
                     itype_d  = item_type(item_value[d][0])
                     if options.verbose:
                         print "    ...Handling tricky array ", d, " of shape ", ishape_d, " and dtype", item_value[d].dtype,\
-                              " in upper folder ", upper_folder + "/" + item_name, " at level ", level
+                              " in parent folder ", upper_folder + "/" + item_name, " at level ", level
                     dset = hdf5_subfolder.create_dataset(str(d), ishape_d, dtype=item_value[d].dtype, data=item_value[d])
                 else:
                     print "    ...Cannot1 handle item ", item_name, "of type ", item_type(item_value[d]), \
                           " in upper_folder", upper_folder
                     print "dir(item_value)=", dir(item_value)
         elif item_type(item_value[0]) == "string":
+#           ishape = tuple([len(i) for i in item_value ])
             if options.verbose:
-                print "Handling chararray", item_name, "item_value.dtype=", item_value.dtype, " ishape=", ishape
+                print "...Handling array of strings ", item_name, "item_value.dtype=", item_value.dtype, " ishape=", ishape
                 print "item_value=", item_value, " at level ", level
-            data = numpy.chararray(ishape, itemsize=100)
-            data[:] = item_value
+#           data = numpy.chararray(ishape, itemsize=100)
+#           data[:] = item_value
+            data = numpy.array(item_value, dtype=object)
             if options.verbose:
                print "data=", data
             dt = h5py.special_dtype(vlen=unicode)
-            dset = hdf5_folder.create_dataset(item_name, ishape, dtype=dt, data=data)
+            dset = hdf5_folder.create_dataset(item_name, data.shape, dtype=dt, data=data)
         elif  item_type(item_value[0]) == "int":    
             if options.verbose:
-                print "Handling array of type int and size", len(item_value)
+                print "...Handling array of type int and size", len(item_value)
             data = numpy.array(numpy.int32(item_value))
             if options.verbose:
                 print "data=", data, " ishape=", ishape
@@ -174,7 +186,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
             print "dir(item_value)=", dir(item_value)
     elif item_type(item_value) == "string":
         if options.verbose:
-            print "...Handling string2 item ", item_name, " in upper folder ", upper_folder, \
+            print "...Handling string2 item ", item_name, " in parent folder ", upper_folder, \
                    " item type ", item_type(item_value), \
                    "at level ", level, " item_value=", item_value 
 #       dt = h5py.special_dtype(vlen=unicode)
@@ -187,7 +199,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
         dset = hdf5_folder.create_dataset(item_name, (1,), dtype=dt, data=data)
     elif item_type(item_value) == "float":
         if options.verbose:
-            print "...Handling item ", item_name, " in upper folder ", upper_folder, \
+            print "...Handling item ", item_name, " in parent folder ", upper_folder, \
                    " item type ", item_type(item_value), \
                    "at level ", level, " item_value=", item_value
         dset = hdf5_folder.create_dataset(item_name, dtype=numpy.float_, \
@@ -195,7 +207,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
                                           shape=(1,))
     elif item_type(item_value) == "int":
         if options.verbose:
-            print "...Handling item ", item_name, " in upper folder ", upper_folder, \
+            print "...Handling item ", item_name, " in parent folder ", upper_folder, \
                    " item type ", item_type(item_value), \
                    "at level ", level, " item_value=", item_value
         dset = hdf5_folder.create_dataset(item_name, dtype=numpy.int_, \
@@ -210,16 +222,16 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
 
 # ----------------------------------------------------------------------
 
-def create_hdf5_file(mat_file_name, options):
-
-    # Create the name of output file
-    hdf5_file_name = mat_file_name[0:len(mat_file_name)-3] + "h5"
+def create_hdf5_file(mat_file_name, hdf5_file_name, options):
 
     # Read the input file and initialize hdf5 object
-    mat = scipy.io.loadmat(mat_file_name,squeeze_me=True,struct_as_record=False)
+#   print "opening mat file ..."
+    mat = scipy.io.loadmat(mat_file_name,squeeze_me=True,chars_as_strings=True,struct_as_record=False)
+#   print "opening hdf5 file ..."
     f  = h5py.File(hdf5_file_name, 'w')  # 'w" stands for truncating if file exists
 
     # Parse mat file and store its contents in hdf5 object
+    print "parsing ..."
     header  = mat['__header__']
     version = mat['__version__']
 #   print "Attributes=", dir(mat)
@@ -242,9 +254,7 @@ def create_hdf5_file(mat_file_name, options):
             if not re.search('__', k2):
                 parse_item(k2, mat2[k2], metadata, 1, 'metadata', options)
 
-    # Create the name of output file
-    hdf5_file_name = mat_file_name[0:len(mat_file_name)-3] + "h5"
-    print "output_file_name=", hdf5_file_name
+    print "...Done"
 
 # ----------------------------------------------------------------------
 
@@ -262,10 +272,13 @@ if __name__ == "__main__":
     if len(args) >= 1:
         # Extract the name of an input file
         mat_file_name = str(args[0:1][0])
-        print "input_file_name=", mat_file_name
+        if not mat_file_name.split(".")[1] == "mat":
+            sys.exit("\nNot a MAT file")
+        hdf5_file_name = mat_file_name[0:len(mat_file_name)-3] + "h5"
+        print "Input:  ", mat_file_name
+        print "Output: ", hdf5_file_name
 
-        hdf5_file_name = create_hdf5_file(mat_file_name, options)
-
+        create_hdf5_file(mat_file_name, hdf5_file_name, options)
     else:
         parser.print_usage()
         sys.exit(2)
