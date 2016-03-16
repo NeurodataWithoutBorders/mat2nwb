@@ -225,8 +225,7 @@ def parse_item(item_name, item_value, hdf5_folder, level, upper_folder, options)
 def create_hdf5_file(mat_file_name, hdf5_file_name, options):
 
     # Read the input file and initialize hdf5 object
-#   print "opening mat file ..."
-    mat = scipy.io.loadmat(mat_file_name,squeeze_me=True,chars_as_strings=True,struct_as_record=False)
+    mat = scipy.io.loadmat(mat_file_name,squeeze_me=True,struct_as_record=False)
 #   print "opening hdf5 file ..."
     f  = h5py.File(hdf5_file_name, 'w')  # 'w" stands for truncating if file exists
 
