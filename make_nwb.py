@@ -5,7 +5,7 @@
 make_nwb.py
 
 Created by Claudia Friedsam on 2015-02-08.
-Redesigned by Gennady Denisov on 2016-01-22.
+Redesigned by Gennady Denisov on 2016-03-28.
 
 """
 
@@ -122,9 +122,9 @@ def create_plane_map(orig_h5, plane_map):
 def find_exp_time(input_h5):
     # SP data
     if "metaDataHash" in h5lib.get_child_group_names(input_h5):
-        d = h5lib.get_value_path_by_partial_key(input_h5['/metaDataHash'], \
+        d = h5lib.get_value_by_key(input_h5['/metaDataHash'], \
                          "dateOfExperiment")
-        t = h5lib.get_value_path_by_partial_key(input_h5['/metaDataHash'], \
+        t = h5lib.get_value_by_key(input_h5['/metaDataHash'], \
                          "timeOfExperiment")
 #       print "d=", d
 #       print "t=", t
@@ -132,10 +132,22 @@ def find_exp_time(input_h5):
     # NL data
     elif "dateOfExperiment" in h5lib.get_child_group_names(input_h5) and \
          "timeOfExperiment" in h5lib.get_child_group_names(input_h5):
-        d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
-                     ["dateOfExperiment", "dateOfExperiment"])).tolist()[0]
-        t = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
-                     ["timeOfExperiment", "timeOfExperiment"])).tolist()[0]
+        try:
+            # Python2 version of .h5 file
+            d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["dateOfExperiment", "dateOfExperiment"])).tolist()[0]
+            t = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["timeOfExperiment", "timeOfExperiment"])).tolist()[0]
+        except:
+            # Python3 version of .h5 file
+            print "date=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["dateOfExperiment"])).tolist()
+            print "time=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["timeOfExperiment"])).tolist()
+            d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["dateOfExperiment"])).tolist()[0]
+            t = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["timeOfExperiment"])).tolist()[0]
 #       print "d=", d
 #       print "t=", t
         dt=datetime.datetime.strptime(d+t, "%Y%m%d%H%M%S")
@@ -321,19 +333,68 @@ def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, num_planes
 
 # ------------------------------------------------------------------------------
 
-def create_behavioral_time_series(nwb_object, top_folder, keyName, series_type, \
-                                  series_name, trial_start_times, source, options):
+def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type, \
+                                  series_name, t, var, description, source, \
+                                  options):
     # initialize timeseries
     ts = nwb_object.create_timeseries(series_type, series_name)
-    # fill in values
-    time = np.array(h5lib.get_value_pointer_by_key(top_folder, keyName, \
-                                                    options.debug)).tolist()
-    ts = behavior_helper(ts, time, trial_start_times, 1)
-    comments_in = h5lib.get_description_by_key(top_folder, keyName)
-    ts.set_description(keyName)
-    ts.set_source(source)
-    ts.set_comments(comments_in)
+    if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
+                   "rewardCue",   "leftLicks", "rightLicks", "whiskerVars", \
+                   "touches"]:
+        # SP data
+        if var == '':
+            samples = 0
+            for i in range(len(t)):
+                if np.isnan(t[i]):
+                    continue
+                samples += 1
+            assert samples == len(t), "NaNs found when reading " + series_name
+        else:
+            clean_var = []
+            clean_t   = []
+            lent = len(t)
+            for i in range(lent):
+                if not np.isnan(t[i]) and not np.isnan(var[i]):
+                    clean_var.append(var[i])
+                    clean_t.append(t[i])
+            t   = np.array(clean_t)
+            var = np.array(clean_var)
+            if options.verbose:
+                print series_name + " has %d nans (removed)" % (lent - len(t))
 
+        if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
+                       "rewardCue", "touches"]:
+            # times are stored as 'on' in even intervals, 'off' in odd intervals
+            # create list of alternating +1, -1, +1, -1
+            ts.set_value("timestamps", t)
+            on_off = np.int_(np.zeros(len(t)))
+            on_off += -1
+            on_off[::2] *= -1
+            ts.set_data(on_off)
+        elif keyName in ["whiskerVar"]:
+            if series_name == "whisker_angle":
+# GD unit, conversion and resolution should be read in from input file
+                ts.set_data(var, unit="degrees", conversion=1, resolution=0.001)
+            else:
+# GD what is the unit for curvature?
+                ts.set_data(var, "Unknown", 1, 1)
+        else: 
+            # keyName in ["leftLicks", "rightLicks"]
+            # there's no meaningful entries to store in data[], as events are binary
+            # store a '1'
+            data = np.zeros(len(t))
+            data += 1
+            ts.set_data(data, "Licks", 1, 1)
+        ts.set_time(t)
+    else:
+        # NL data
+        # fill in values
+        time = np.array(h5lib.get_value_pointer_by_key(hash_folder, keyName, \
+                                                    options.debug)).tolist()
+        ts = behavior_helper(ts, time, t, 1)
+    ts.set_description(description)
+    ts.set_source(source)
+    ts.set_comments("Timestamp array stores " + series_name + " times")
     return ts
 
 # ------------------------------------------------------------------------------
@@ -347,6 +408,7 @@ def behavior_helper(ts, time, start_times, data_value):
     data = [data_value]*len(timestamps)
     # write data into timeseries
     ts.set_value("timestamps", timestamps)
+# GD what are the agguments of 'set_data'?
     ts.set_data(data,'s',0.1,1)
 
     return ts
@@ -365,50 +427,49 @@ def process_pole_position(orig_h5, nwb_object, options):
         mod.set_description("Intervals that pole is accessible")
         pole_iface = mod.create_interface("BehavioralTimeSeries")
         pole_iface.set_source("Times and intervals are as reported in Simon's data file")
-        grp = h5lib.get_value_pointer_by_key(orig_h5['eventSeriesArrayHash'],'poleInReach', \
+
+        keyName = "poleInReach"
+        hash_folder = orig_h5['eventSeriesArrayHash']
+        grp = h5lib.get_value_pointer_by_key(hash_folder, keyName, \
                                               options.debug)
+# GD: should use trialTimeUnit to figure out the multiplier below
         t = grp["eventTimes/eventTimes"].value * 0.001
-        samples = 0
-        for i in range(len(t)):
-            if np.isnan(t[i]):
-                continue
-            samples += 1
-        assert samples == len(t), "NaNs found when reading pole position"
-        # times are stored as 'on' in even intervals, 'off' in odd intervals
-        pole_acc = nwb_object.create_timeseries("IntervalSeries", "pole_accessible")
-        # create list of alternating +1, -1, +1, -1
-        
-        pole_acc.set_value("timestamps", t)
-        print "\nlen(t)=", len(t)        
-        on_off = np.int_(np.zeros(len(t)))
-        on_off += -1
-        on_off[::2] *= -1
-        pole_acc.set_data(on_off)       
-        pole_acc.set_time(t)          
-        pole_acc.set_description("Intervals that pole is accessible")
-        pole_acc.set_source("Intervals are as reported in Simon's data file")
-        print "\npole_acc=", pole_acc
+        source = "Intervals are as reported in somatosensory cortex data file"
+        description = h5lib.get_description_by_key(hash_folder, keyName)
+        pole_acc = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName, "IntervalSeries", \
+                   "pole_accessible", t, '', description, source, options)
         pole_iface.add_timeseries(pole_acc)
         mod.finalize()
     elif "PoleInTime"  in h5lib.get_key_list(orig_h5['trialPropertiesHash']) and \
          "PoleOutTime" in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
         # NL data
-        # get relevant pole_in data
         mod.set_description("Intervals that pole is accessible")
         pole_iface = mod.create_interface("BehavioralEvents")
-        source = "Times are as reported in Nuo's data file, but relative to session start"
-        pole_iface.set_source(source)
+        pole_iface.set_source("Times and intervals are as reported in motor cortex data file, but relative to session start")
+
+        hash_folder = orig_h5["trialPropertiesHash"]
+        source = "Times as reported in motor cortex data file, but relative to session start"
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
-        # initialize and process pole_in time series
+
+        # get relevant pole_in data
+        keyName1 = "PoleInTime"
+        description = h5lib.get_description_by_key(hash_folder, keyName1)
         pole_in  = create_behavioral_time_series(nwb_object, \
-                   orig_h5["trialPropertiesHash"], "PoleInTime", "IntervalSeries", \
-                   "pole_in", trial_start_times, source, options)
+                       hash_folder, keyName1, "IntervalSeries", \
+                       "pole_in", trial_start_times, '', description, source, \
+                       options)
         pole_iface.add_timeseries(pole_in)
+
         # same procedure for pole_out
+        keyName2 = "PoleOutTime"
+        description = h5lib.get_description_by_key(hash_folder, keyName2)
         pole_out = create_behavioral_time_series(nwb_object, \
-                   orig_h5["trialPropertiesHash"], "PoleOutTime", "IntervalSeries", \
-                   "pole_out", trial_start_times, source, options)
+                       hash_folder, keyName2, "IntervalSeries", \
+                       "pole_out", trial_start_times, '', description, source, \
+                       options)
         pole_iface.add_timeseries(pole_out)
+
         mod.finalize()
     else:
         sys.exit("Unable to read pole position")
@@ -418,48 +479,37 @@ def process_pole_position(orig_h5, nwb_object, options):
 # licks
 # BehavioralEvent (lick_left)
 # BehavioralEvent (lick_right)
-def read_licks(orig_h5, nwb_object):
+def process_licks(orig_h5, nwb_object):
     mod = nwb_object.create_module("Licks")
     mod.set_description("Lickport contacts, right and left")
     lick_iface = mod.create_interface("BehavioralEvents")
-    lick_iface.set_source("Data as reported in Simon's data file")
-    # left lick is H5 channel 3
-    grp3 = orig_h5["eventSeriesArrayHash/value/3"]
-    t = grp3["eventTimes/eventTimes"].value * 0.001
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]):
-            continue
-        samples += 1
-    assert samples == len(t), "NaNs found when reading licks"
-    # there's no meaningful entries to store in data[], as events are binary
-    # store a 1
-    ts_left = nwb_object.create_timeseries("IntervalSeries", "lick_left")
-    ts_left.set_description("Left lickport contact times (beam breaks left)")
-    ts_left.set_source("Times as reported in Simon's data file")
-    ts_left.set_comments("Timestamp array stores lick times")
-#   ts_left.set_dtype('int8')
-    data = np.zeros(len(t))
-    data += 1
-    ts_left.set_data(data, "Licks", 1, 1)
-    ts_left.set_time(t)
+    lick_iface.set_source("Data as reported in somatosensory cortex data file")
+
+    hash_folder = orig_h5['eventSeriesArrayHash']
+    source = "Intervals are as reported in somatosensory cortex data file"
+
+    # Handle left licks
+    keyName1 = 'leftLicks'
+    description = h5lib.get_description_by_key(hash_folder, keyName1)
+    grp = h5lib.get_value_by_key(hash_folder, keyName1)
+# GD
+    t = grp["eventTimes/eventTimes"].value * 0.001
+    ts_left = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName1, "IntervalSeries", \
+                   "lick_left", t, '', description, source, options)
     lick_iface.add_timeseries(ts_left)
-    # right lick is H5 channel 4
-    grp4 = orig_h5["eventSeriesArrayHash/value/4"]
-    t = grp4["eventTimes/eventTimes"].value * 0.001
-    # there's no meaningful entries to store in data[], as events are binary
-    # store a '1'
-    ts_right = nwb_object.create_timeseries("IntervalSeries", "lick_right")
-    ts_right.set_description("Right lickport contact times (beam breaks right)")
-    ts_right.set_source("Times as reported in Simon's data file")
-    ts_right.set_comments("Timestamp array stores lick times")
-#   ts_right.set_dtype('int8')
-    data = np.zeros(len(t))
-    data += 1
-    ts_right.set_data(data, "Licks", 1, 1)
-    ts_right.set_time(t)
+
+    # Handle right licks      
+    keyName2 = 'rightLicks'             
+    description = h5lib.get_description_by_key(hash_folder, keyName2) 
+    grp = h5lib.get_value_by_key(hash_folder, keyName2)  
+# GD
+    t = grp["eventTimes/eventTimes"].value * 0.001
+    ts_right = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName2, "IntervalSeries", \
+                   "lick_right", t, '', description, source, options)
     lick_iface.add_timeseries(ts_right)
-    #
+
     mod.finalize()
 
 # ------------------------------------------------------------------------------
@@ -467,44 +517,37 @@ def read_licks(orig_h5, nwb_object):
 # water
 # BehavioralInterval (water_left)
 # BehavioralInterval (water_right)
-def read_water(orig_h5, nwb_object):
+def process_water(orig_h5, nwb_object):
     mod = nwb_object.create_module("Water")
     mod.set_description("Water reward intervals, left and right")
     water_iface = mod.create_interface("BehavioralTimeSeries")
     water_iface.set_source("Times and intervals are as reported in Simon's data file")
 
-    # left water is H5 channel 5
-    grp5 = orig_h5["eventSeriesArrayHash/value/5"]
-    t = grp5["eventTimes/eventTimes"].value * 0.001
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]):
-            continue
-        samples += 1
-    assert samples == len(t), "NaNs found when reading water"
-    # times are stored as 'on' in even intervals, 'off' in odd intervals
-    water_left = nwb_object.create_timeseries("IntervalSeries", "water_left")
-    on_off = np.zeros(len(t))
-    on_off += -1
-    on_off[::2] *= -1
-    water_left.set_data(on_off) 
-    water_left.set_time(t) 
-    water_left.set_description("Intervals for left water reward delivery")
-    water_left.set_source("Intervals are as reported in Simon's data file")
+    hash_folder = orig_h5['eventSeriesArrayHash']
+    source = "Intervals are as reported in somatosensory cortex data file"
+
+    # left water
+    keyName1 = "leftReward"
+    description = h5lib.get_description_by_key(hash_folder, keyName1)
+    grp = h5lib.get_value_by_key(hash_folder, keyName1)
+# GD
+    t = grp["eventTimes/eventTimes"].value * 0.001
+    water_left = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName1, "IntervalSeries", \
+                   "water_left", t, '', description, source, options)
     water_iface.add_timeseries(water_left)
-    # right water is H5 channel 6
-    grp6 = orig_h5["eventSeriesArrayHash/value/6"]
-    t = grp6["eventTimes/eventTimes"].value * 0.001
-    # times are stored as 'on' in even intervals, 'off' in odd intervals
-    water_right = nwb_object.create_timeseries("IntervalSeries", "water_right")
-    on_off = np.zeros(len(t))
-    on_off += -1
-    on_off[::2] *= -1
-    water_right.set_data(on_off)
-    water_right.set_time(t)
-    water_right.set_description("Intervals for right water reward delivery")
-    water_right.set_source("Intervals are as reported in Simon's data file")
+
+    # right water 
+    keyName2 = "rightReward"
+    description = h5lib.get_description_by_key(hash_folder, keyName2)
+    grp = h5lib.get_value_by_key(hash_folder, keyName2)
+# GD
+    t = grp["eventTimes/eventTimes"].value * 0.001
+    water_right = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName2, "IntervalSeries", \
+                   "water_right", t, '', description, source, options)
     water_iface.add_timeseries(water_right)
+
     mod.finalize()
         
 # ------------------------------------------------------------------------------
@@ -513,32 +556,26 @@ def read_water(orig_h5, nwb_object):
 # BehavioralInterval (auditory_cue)
 def process_cue(orig_h5, nwb_object, options):
     mod = nwb_object.create_module("Auditory")
+
     if "eventSeriesArrayHash" in h5lib.get_child_group_names(orig_h5) and \
                   "rewardCue" in h5lib.get_key_list(orig_h5['eventSeriesArrayHash']):
         # SP data
         mod.set_description("Auditory cue signaling animal to collect reward")
-#       cue_iface = mod.create_interface("BehavioralTimeSeries")
+        source = "Intervals are as reported in somatosensory cortex data file"
         cue_iface = mod.create_interface("BehavioralTimeSeries")
         cue_iface.set_source("Intervals are as reported in Simon's data file")
-        # auditory cue is H5 channel 7
-        grp7 = orig_h5["eventSeriesArrayHash/value/7"]
-        t = grp7["eventTimes/eventTimes"].value[0:4] * 0.001
-        samples = 0
-        for i in range(len(t)):
-            if np.isnan(t[i]):
-                continue
-            samples += 1
-        assert samples == len(t), "NaNs found when reading cue"
-#       print "\n\nt=", t
-        # times are stored as 'on' in even intervals, 'off' in odd intervals
-        cue = nwb_object.create_timeseries("IntervalSeries", "auditory_cue")
-        on_off = np.zeros(len(t))
-        on_off += -1
-        on_off[::2] *= -1
-        cue.set_data(on_off)
-        cue.set_time(t)
-        cue.set_description("Intervals when auditory cue presented")
-        cue.set_source("Intervals are as reported in Simon's data file")
+
+        hash_folder = orig_h5['eventSeriesArrayHash']
+
+        # auditory cue 
+        keyName = "rewardCue"
+        description = h5lib.get_description_by_key(hash_folder, keyName)
+        grp = h5lib.get_value_by_key(hash_folder, keyName)
+# GD
+        t = grp["eventTimes/eventTimes"].value[0:4] * 0.001
+        cue = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName, "IntervalSeries", \
+                   "auditory_cue", t, '', description, source, options)
         cue_iface.add_timeseries(cue)      
         mod.finalize()
     elif "CueTime" in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
@@ -548,151 +585,123 @@ def process_cue(orig_h5, nwb_object, options):
         cue_iface = mod.create_interface("BehavioralEvents")
         source = "Times are as reported in Nuo's data file, but relative to session time"
         cue_iface.set_source(source)
+
+        keyName = "CueTime"
+        hash_folder = orig_h5['trialPropertiesHash']
+        description = h5lib.get_description_by_key(hash_folder, keyName)
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
         # initialize and process auditory cue time series
         cue = create_behavioral_time_series(nwb_object, \
               orig_h5["trialPropertiesHash"], "CueTime", "IntervalSeries", \
-              "auditory_cue", trial_start_times, source, options)
+              "auditory_cue", trial_start_times, '', description, source, options)
         cue_iface.add_timeseries(cue)
+        mod.finalize()
     else:
         sys.exit("Unable to read cue")
-    mod.finalize()
 
 # ------------------------------------------------------------------------------
 
 # time is stored in tsah::value::1::time::time
 # angle is stored in tsah::value::1::valueMatrix::valueMatrix[0[
 # curvature is stored in tsah::value::1::valueMatrix::valueMatrix[1[
-def read_whisker(orig_h5, nwb_object, options):
-    grp = orig_h5["timeSeriesArrayHash/value/1"]
-    t = grp["time/time"].value * 0.001
-    val = grp["valueMatrix/valueMatrix"].value
-    angle = val[0]
-    curv = val[1]
+def process_whisker(orig_h5, nwb_object, options):
     # create module
     mod = nwb_object.create_module("Whisker")
     mod.set_description("Whisker angle and curvature (relative) of the whiskers and times when the pole was touched by whiskers")
+
+    # Create interface
     whisker_iface = mod.create_interface("BehavioralEvents")
     whisker_iface.set_source("Data as reported in simon's data file")
-    # whisker angle
+
+    # Create time series
+    keyName = 'whiskerVars'
+    hash_folder = orig_h5['timeSeriesArrayHash']
+    grp   = h5lib.get_value_by_key(hash_folder, keyName)   
+# GD scaling must be read in from input file
+    t     = grp["time/time"].value * 0.001
+    val   = grp["valueMatrix/valueMatrix"].value
+    
+    # whisker angle time series
     # embedded nans screw things up -- remove them
     # count how many non-nan values, and prepare output array
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]) or np.isnan(angle[i]):
-            continue
-        samples += 1
-    if samples == len(t):
-        clean_angle = angle
-        clean_t = t
-    else:
-        if options.verbose:
-            print "  whisker angle has %d nans (removed)" % (len(t) - samples)
-        clean_angle = np.zeros(samples)
-        clean_t = np.zeros(samples)
-        samples = 0
-        for i in range(len(t)):
-            if np.isnan(t[i]) or np.isnan(angle[i]):
-                continue
-            a = angle[i]
-            clean_angle[samples] = a
-            clean_t[samples] = t[i]
-            samples += 1
-    ts_angle = nwb_object.create_timeseries("IntervalSeries", "whisker_angle")
-    ts_angle.set_description("angle for c3")
-    ts_angle.set_source("whisker angle as reported in simon's data file")
-    ts_angle.set_data(clean_angle, unit="degrees", conversion=1, resolution=0.001)
-#   ts_angle.set_dtype('f4')
-    ts_angle.set_time(clean_t)
+    angle = val[0]
+    source   = "Whisker angle as reported in somatosensory cortex data file"
+    description = "Angle of whiskers"
+    ts_angle = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName, "IntervalSeries", \
+                   "whisker_angle", t, angle, description, source, options)
     whisker_iface.add_timeseries(ts_angle)
+
     # whisker curvature
-    ts_curve = nwb_object.create_timeseries("IntervalSeries","whisker_curve")
-    # embedded NaNs screw things up -- remove them
-    # count how many non-NaN values, and prepare output array
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]) or np.isnan(curv[i]):
-            continue
-        samples += 1
-    if samples == len(t):
-        clean_curv = curv
-        clean_t = t
-    else:
-        if options.verbose:
-            print "  Whisker curvature has %d NaNs (removed)" % (len(t) - samples)
-        clean_curv = np.zeros(samples)
-        clean_t = np.zeros(samples)
-        samples = 0
-        for i in range(len(t)):
-            if np.isnan(t[i]) or np.isnan(curv[i]):
-                continue
-            clean_curv[samples] = curv[i]
-            clean_t[samples] = t[i]
-            samples += 1
-    ts_curve.set_description("Curvature change for c3")
-    ts_curve.set_source("Curvature as reported in Simon's data file")
-    ts_curve.set_data(clean_curv, "Unknown", 1, 1)
-    ts_curve.set_time(clean_t)
+    curv  = val[1]
+    source = "Whisker curvature as reported in somatosensory cortex data file"
+    description = "Curvature (relative) of whiskers"
+    ts_curve = create_behavioral_time_series(nwb_object, \
+                   hash_folder, keyName, "IntervalSeries", \
+                   "whisker_curve", t, curv, description, source, options)
     whisker_iface.add_timeseries(ts_curve)
-    ####################################################################
-    # extracted from read_pole_position
-    # pole touch is H5 channel 2
-    grp2 = orig_h5["eventSeriesArrayHash/value/2"]
+
+    # pole touches
     pole_iface = mod.create_interface("BehavioralTimeSeries")
+
+    keyName = "touches"
+    hash_folder =  orig_h5["eventSeriesArrayHash"]
+    grp = h5lib.get_value_by_key(hash_folder, keyName)
+
     # protraction touches
-    t = grp2["eventTimes/1/1"].value * 0.001
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]):
-            continue
-        samples += 1
-    assert samples == len(t), "NaNs found when reading protraction"
-    # times are stored as 'on' in even intervals, 'off' in odd intervals
-    on_off = np.zeros(len(t))
-    on_off += -1
-    on_off[::2] *= -1
-    pole_touch_pr = nwb_object.create_timeseries("IntervalSeries","pole_touch_protract")
-    pole_touch_pr.set_data(on_off)
-    pole_touch_pr.set_time(t)
-    pole_touch_pr.set_description("Intervals that whisker touches pole (protract)")
-    pole_touch_pr.set_source("Intervals are as reported in Simon's data file")
+# GD
+    t = grp["eventTimes/1/1"].value * 0.001
+    description = "Intervals that whisker touches pole (protract)"
+    source = "Intervals are as reported in somatosensory cortex data file"
+    pole_touch_pr = create_behavioral_time_series(nwb_object, hash_folder, \
+                        keyName, "IntervalSeries", "pole_touch_protract", \
+                        t, '', description, source, options)
     pole_iface.add_timeseries(pole_touch_pr)
+
     # retraction touches
-    t = grp2["eventTimes/2/2"].value * 0.001
-    samples = 0
-    for i in range(len(t)):
-        if np.isnan(t[i]):
-            continue
-        samples += 1
-    assert samples == len(t), "NaNs found when reading retraction"
-    # times are stored as 'on' in even intervals, 'off' in odd intervals
-    on_off = np.zeros(len(t))
-    on_off += -1
-    on_off[::2] *= -1
-    pole_touch_re = nwb_object.create_timeseries("IntervalSeries", "pole_touch_retract")
-    pole_touch_re.set_data(on_off)   
-    pole_touch_re.set_time(t)
-    pole_touch_re.set_description("Intervals that whisker touches pole (retract)")
-    pole_touch_re.set_source("Intervals are as reported in Simon's data file")
+# GD
+    t = grp["eventTimes/2/2"].value * 0.001
+    description = "Intervals that whisker touches pole (retract)"
+    pole_touch_re = create_behavioral_time_series(nwb_object, hash_folder, \
+                        keyName, "IntervalSeries", "pole_touch_retract", \
+                        t, '', description, source, options)
     pole_iface.add_timeseries(pole_touch_re)
-    #
+
     mod.finalize()
 
-## find indices in timestamps[] that are between specified interval
-## note: only works for t_interval=1
-#def find_ts_interval(nwb_object, ts, start, stop):
-#    timestamps = nwb_object.file_pointer[ts]["timestamps"].value
-#    start_idx = -1
-#    stop_idx = -1
-#    for i in range(len(timestamps)):
-#        t = timestamps[i]
-#        if start <= t and start_idx < 0:
-#            start_idx = i
-#        if t < stop:
-#            stop_idx = i
-#        if t >= stop:
-#            break
-#    return start_idx, stop_idx
+# ------------------------------------------------------------------------------
+
+def process_pole_touches(orig_h5, nwb_object):
+    # add kappaMaxAbsOverTouch to pole_touch_protract
+    keyName1 = "touches"
+    keyName2 = "kappaMaxAbsOverTouch"
+    kappa_ma_pr = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
+                                                   "eventPropertiesHash/1", keyName2)
+    pole_tp_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_protract"
+    pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
+    pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
+    # add kappaMaxAbsOverTouch to pole_touch_retract
+    kappa_ma_re = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
+                                                   "eventPropertiesHash/2", keyName2)
+    pole_tr_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_retract"
+    pole_tr_grp = nwb_object.file_pointer[pole_tr_path]
+    pole_tr_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_re)
+
+# ------------------------------------------------------------------------------
+
+def process_stimulus(orig_h5, nwb_object):
+    keyName = "StimulusPosition"
+    stim_pos = h5lib.get_value_by_key(orig_h5['trialPropertiesHash'], keyName)
+    trial_t = orig_h5["trialStartTimes/trialStartTimes"].value * 0.001
+    rate = (trial_t[-1] - trial_t[0])/(len(trial_t)-1)
+    description = h5lib.get_description_by_key(orig_h5["trialPropertiesHash"], keyName)
+    zts = nwb_object.create_timeseries("IntervalSeries","zaber_motor_pos")
+    zts.set_time(trial_t)
+    zts.set_data(stim_pos, "unknown", 1, 1)
+    zts.set_description(description)
+    zts.set_comments(keyName)
+    zts.set_path("processing/ZMP/BehavioralTimeSeries/zaber_motor_pos")
+    zts.finalize()
 
 # ------------------------------------------------------------------------------
 
@@ -766,7 +775,6 @@ def create_trials(orig_h5, nwb_object):
                 epoch.add_timeseries(key, ts_path)
             for key in intervals:
                 ts_path = "/processing/" + intervals[key] + "/BehavioralTimeSeries/" + key
-#               print "\nts_path=", ts_path
                 epoch.add_timeseries(key, ts_path)
             epoch.finalize()
 
@@ -840,7 +848,7 @@ def get_trial_types(orig_h5, nwb_object):
     if "PhotostimulationType" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
         # NL data
         photostim_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], "PhotostimulationType")
-#       print "photostim_types=", photostim_types
+        print "photostim_types=", photostim_types
         num_trial_types = 8
     else:
         # SP data
@@ -1025,45 +1033,17 @@ def process_behavioral_data(orig_h5, nwb_object, options):
     if options.verbose:
         print "Processing behavioral time series data"
 
-    # Both MC and SP data:
+    # Both NL and SP data:
     process_pole_position(orig_h5, nwb_object, options)
     process_cue(orig_h5, nwb_object, options)
 
     # Only SP data:
     if "whiskerVars" in h5lib.get_key_list(orig_h5['timeSeriesArrayHash']):
-        read_whisker(orig_h5, nwb_object, options)
-
-        # add kappaMaxAbsOverTouch to pole_touch_protract
-        kappa_ma_path = "eventSeriesArrayHash/value/2/eventPropertiesHash/1/value/2/2"
-        kappa_ma = orig_h5[kappa_ma_path].value
-        pole_tp_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_protract"
-        pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
-        pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma)
-        # add kappaMaxAbsOverTouch to pole_touch_retract
-        kappa_ma_path = "eventSeriesArrayHash/value/2/eventPropertiesHash/2/value/2/2"
-        kappa_ma = orig_h5[kappa_ma_path].value
-        pole_tr_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_retract"
-        pole_tr_grp = nwb_object.file_pointer[pole_tr_path]
-        pole_tr_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma)
-
-        read_licks(orig_h5, nwb_object)
-
-        read_water(orig_h5, nwb_object)
-
-        pole_pos_path = "trialPropertiesHash/value/3/3"
-        pole_pos = parse_h5_obj(orig_h5[pole_pos_path])[0]
-        trial_t = orig_h5["trialStartTimes/trialStartTimes"].value * 0.001
-        rate = (trial_t[-1] - trial_t[0])/(len(trial_t)-1)
-        comments = parse_h5_obj(orig_h5["trialPropertiesHash/keyNames"])[0][2]
-        descr = parse_h5_obj(orig_h5["trialPropertiesHash/descr"])[0][2]
-
-        zts = nwb_object.create_timeseries("IntervalSeries","zaber_motor_pos")
-        zts.set_time(trial_t)
-        zts.set_data(pole_pos, "unknown", 1, 1)
-        zts.set_description(str(descr))
-        zts.set_comments(str(comments))
-        zts.set_path("processing/ZMP/BehavioralTimeSeries/zaber_motor_pos")
-        zts.finalize()
+        process_whisker(orig_h5, nwb_object, options)
+        process_licks(orig_h5, nwb_object)
+        process_water(orig_h5, nwb_object)
+        process_pole_touches(orig_h5, nwb_object)
+        process_stimulus(orig_h5, nwb_object)
 
 # ------------------------------------------------------------------------------
 
@@ -1116,7 +1096,7 @@ def create_epochs(orig_h5, nwb_object, options):
     if options.verbose:
         print "Creating epochs"
 
-    create_trials(orig_h5, nwb_object)
+    create_trials(orig_h5,   nwb_object)
     get_trial_types(orig_h5, nwb_object)
 
     if "GoodTrials" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
@@ -1640,7 +1620,7 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
 if __name__ == "__main__":
 
     usage = "Usage: \n\
-    %prog data_h5 [options (-h to list)]"
+    %prog data_h5 [meta_data_h5] [options (-h to list)]"
 
     parser = optparse.OptionParser(usage=usage)
     parser = make_nwb_command_line_parser(parser)
@@ -1663,7 +1643,6 @@ if __name__ == "__main__":
             options.output_folder = os.path.dirname(data_path)
         output_path = os.path.join(options.output_folder, data_basename.split(".")[0] + ".nwb")
 
-#       plane_map = {}
         produce_nwb(data_path, metadata_path, output_path, options)
     else:
         parser.print_usage()
