@@ -91,11 +91,23 @@ def add_plane_map_entry(plane_map, h5_plane_name, filename):
 # ------------------------------------------------------------------------------
 
 def create_plane_map(orig_h5, plane_map):
-    num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    num_subareas = 1
+    if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+        num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
     for subarea in range(num_subareas):
         # fetch time array
-        grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
-        grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
+#       disp(['path10=' 'timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]);
+#       disp(['path20=' 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]);
+        try:
+            if num_subareas == 1:
+                grp = orig_h5['timeSeriesArrayHash/value/imagingPlane']
+                grp2 = orig_h5['timeSeriesArrayHash/descrHash/value']
+            else:
+                grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
+                grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
+        except:
+            print "Cannot create plane map"
+            break
         if grp2.keys()[0] == 'masterImage':
             num_planes = 1
         else:
@@ -105,10 +117,14 @@ def create_plane_map(orig_h5, plane_map):
             #     pgrp = grp
             # else:
             #     pgrp = grp["%d"%(plane+1)]
-            pgrp = grp["%d"%(plane+1)]
+#           print "\nsubarea=", subarea, " plane=", plane
+            try:
+                pgrp = grp["%d"%(plane+1)]
+            except:
+                # Warning: only one imaging plane available (instead of 3)
+                pgrp = grp
             old_name = "area%d_plane%d" % (subarea+1, plane+1)
             frame_idx = pgrp["sourceFileFrameIdx"]["sourceFileFrameIdx"].value
-            # lst = pgrp["sourceFileList"]
             lst = parse_h5_obj(pgrp["sourceFileList"])[0]
             for k in lst:
                 # srcfile = str(lst[k][k].value)
@@ -160,26 +176,31 @@ def find_exp_time(input_h5):
 
 # create 2-photon time series, pointing to specified filename
 # use junk values for 2-photon metadata, for now at least
-def create_2p_ts(nwb_object, name, fname, stack_t, plane):
+def create_2p_ts(nwb_object, name, fname, stack_t, plane, imaging_plane):
     zero = np.zeros(1)
-    twop = ts.TwoPhotonSeries(name, nwb_object, "acquisition")
-    twop.set_max_voltage(0)
-    twop.set_min_voltage(0)
-    twop.set_bits_per_pixel(16)
-    twop.set_pmt_gain(1.0)
-    twop.set_wavelength(100.0)
-    twop.set_indicator("GCaMP6s, 780nm")
-    twop.set_imaging_depth(0.150+0.1*plane)
-    twop.set_scan_line_rate(16000)
-    twop.set_field_of_view([ 600e-6, 600e-6 ])
-    twop.set_orientation("rostral is image top")
-    twop.set_format("external")
-    twop.set_dimension([512, 512, 1])
-    twop.set_distance(.15)
-    twop.set_external_file(fname)
-    twop.set_time(stack_t)
-    twop.set_data(zero, "None", 1, 1)
-    twop.finalize()
+    try:
+        twop = nwb_object.create_timeseries("TwoPhotonSeries", name, modality="acquisition")
+        twop.set_value("voltage", 0)
+        twop.set_value("max_voltage", 0)
+        twop.set_value("min_voltage", 0)
+        twop.set_value("bits_per_pixel", 16)
+        twop.set_value("pmt_gain",.650)
+        twop.set_value("wavelength", 1000.0)
+        twop.set_value("indicator", "GCaMP6s")
+        twop.set_value("imaging_depth", 0.150+0.1*plane)
+        twop.set_value("scan_line_rate", 16000)
+        twop.set_value("field_of_view", [ 600e-6, 600e-6 ])
+        twop.set_value("orientation", "rostral is image top")
+        twop.set_value("format", "external")
+        twop.set_value("dimension", [512, 512, 1])
+        twop.set_value("distance", .15)
+        twop.set_value("external_file", fname)
+        twop.set_value("imaging_plane", imaging_plane)
+        twop.set_time(stack_t)
+        twop.set_data(zero, "None", 1, 1)
+        twop.finalize()
+    except:
+        print "Warning: unable to create_2p_ts for name=", name
 
 # ------------------------------------------------------------------------------
 
@@ -203,23 +224,31 @@ def create_aq_ts(nwb_object, name, modality, timestamps, rate, data, comments = 
 # each image has 2 color channels, green and red
 reference_image_red = {}
 reference_image_green = {}
-def create_reference_image(orig_h5, nwb_object, plane_map, area, plane, num_plane = 3):
+def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
+                           plane, num_plane = 3):
     area_grp = orig_h5["timeSeriesArrayHash/descrHash"]["%d"%(1+area)]
     if num_plane == 1:
         plane_grp = area_grp["value/1"]
     else:
         plane_grp = area_grp["value/1"]["%d"%(plane)]
     master = plane_grp["masterImage"]["masterImage"].value
-    green = np.zeros((512, 512))
-    red = np.zeros((512, 512))
-    for i in range(512):
-        for j in range(512):
-            green[i][j] = master[i][j][0]
-            red[i][j] = master[i][j][1]
+    master1_shape = np.array(master).shape
+    green = np.zeros([master1_shape[0],master1_shape[1]])
+    red   = np.zeros([master1_shape[0],master1_shape[1]])
+#   print "\nmaster1_shape=", master1_shape
+    for i in range(master1_shape[0]):
+        for j in range(master1_shape[1]):
+            if len(master1_shape) == 3:
+                green[i][j] = master[i][j][0]
+                red[i][j]   = master[i][j][1]
+            else:
+                # Warning: only one master image is available, so the green and red signals will be identical
+                green[i][j] = master[i][j]
+                red[i][j]   = master[i][j]
     # convert from file-specific area/plane mapping to
     #   inter-session naming convention
-    #image_plane = "area%d_plane%d" % (area, plane)
     oname = "area%d_plane%d" % (area, plane)
+    master_shape[oname] = master1_shape
     image_plane = plane_map[oname]
     name = image_plane + "_green"
     fmt = "raw"
@@ -231,47 +260,60 @@ def create_reference_image(orig_h5, nwb_object, plane_map, area, plane, num_plan
     desc = "Master image (red channel), in 512x512, 8bit"
     nwb_object.create_reference_image(red, name, fmt, desc, 'uint8')
     reference_image_red[image_plane] = red
+    return master_shape
 
 # ------------------------------------------------------------------------------
 
 # pull out all ROI pixel maps for a particular subarea and imaging plane
 #   and store these in the segmentation module
-def fetch_rois(orig_h5, plane_map, seg_iface, area, plane, num_planes=3):
+def fetch_rois(orig_h5, master_shape, plane_map, seg_iface, area, plane, \
+               num_planes=3):
     tsah = orig_h5["timeSeriesArrayHash"]
     # convert from file-specific area/plane mapping to
     #   inter-session naming convention
     #image_plane = "area%d_plane%d" % (area, plane)
     oname = "area%d_plane%d" % (area, plane)
+    master1_shape = master_shape[oname]
     image_plane = plane_map[oname]           
+
     # first get the list of ROIs for this subarea and plane
     # if num_planes == 1:
     #     ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
     # else:
     #     ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
-    ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
+    try:
+        ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
+    except:
+        # Warning: only one imaging plane is available (instead of 3)
+        ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
     roi_ids = ids["ids"].value
     lookup = tsah["value"]["%d"%(area+1)]["ids"]["ids"].value
-    for i in range(len(roi_ids)):
-        rid = roi_ids[i]
-        if num_planes == 1:
-            rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]
-        else:
-            rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]["%d"%plane]
-        # make sure the ROI id is correct
-        record = rois["rois"]["%s"%(1+i)]
-        x = int(parse_h5_obj(record["id"])[0])
-        assert x == int(rid)
-        pix = parse_h5_obj(record["indicesWithinImage"])[0]
-        # pix = record["indicesWithinImage/indicesWithinImage"].value
-        pixmap = []
-        for j in range(len(pix)):
-            v = pix[j]
-            px = int(v / 512)
-            py = int(v) % 512
-            pixmap.append([py,px])
-        weight = np.zeros(len(pixmap)) + 1.0
-        print "image_plane=", image_plane
-        seg_iface.add_roi_mask_pixels(image_plane, "%d"%x, "ROI %d"%x, pixmap, weight, 512, 512)
+    rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]
+    if str(plane) in rois.keys():
+        rois = rois["%d"%plane]
+#   print " area=", area, " plane=", plane, " num_planes=", num_planes
+    if "rois" in rois.keys() and len(rois["rois"].keys()) > 0:
+        for i in range(len(roi_ids)):
+            rid = roi_ids[i]
+            # make sure the ROI id is correct
+#           print "i=", i, " area=", area, " plane=", plane, " num_planes=", num_planes
+            record = rois["rois"]["%s"%(1+i)]
+            x = int(parse_h5_obj(record["id"])[0])
+            assert x == int(rid)
+            pix = parse_h5_obj(record["indicesWithinImage"])[0]
+            # pix = record["indicesWithinImage/indicesWithinImage"].value
+            pixmap = []
+            for j in range(len(pix)):
+                v = pix[j]
+                px = int(v  / master1_shape[1])
+                py = int(v) % master1_shape[0]
+                pixmap.append([py,px])
+            weight = np.zeros(len(pixmap)) + 1.0
+#           print "image_plane=", image_plane, " oname=", oname
+            seg_iface.add_roi_mask_pixels(image_plane, "%d"%x, "ROI %d"%x, pixmap, \
+                weight, master1_shape[1], master1_shape[0])
+    else:
+        print "Cannot handle rois for area=", area, " plane=", plane
 
 # ------------------------------------------------------------------------------
 
@@ -287,7 +329,11 @@ def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, num_planes
     #         plane_ids = area_grp["imagingPlane"]["ids/ids"].value
     #     else:
     #         plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
-    plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
+    try:
+        plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
+    except:
+        # Warning: only one imaging plane is available (instead of 3)
+        plane_ids = area_grp["imagingPlane"]["ids/ids"].value
     area_ids = area_grp["ids/ids"].value
     values = area_grp["valueMatrix/valueMatrix"].value
     # convert from file-specific area/plane mapping to
@@ -318,17 +364,23 @@ def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, num_planes
             dff_trials.append(trial_ids[j])
         if len(dff_t) == 0:
             continue
-        dff_ts = ts.TimeSeries("%d" % pid, nwb_object, "module", "dff")
+        dff_ts = nwb_object.create_timeseries("RoiResponseSeries", "%d" % pid)
         dff_ts.set_description("dF/F for ROI %d" % pid)
         dff_ts.set_comments("For segmentation, see similarly named pixel list under 'segmentation'")
         dff_ts.set_source(oname)
         dff_ts.set_data(dff_data, "dF/F", 1, 1)
-        dff_ts.set_dtype('f4')
         dff_ts.set_time(dff_t)
         dff_ts.set_value("roi_segments", "ROIs")
-        dff_iface.add_trace(image_plane, dff_ts)
-        dff_roi_path = "processing/ROIs/DfOverF/" + image_plane + '/' + str(pid)
-        dff_roi_grp = nwb_object.file_pointer[dff_roi_path]
+        dff_ts.set_value("roi_names", "roi_names")
+        dff_ts.set_value("dtype", "f4")
+        interface_path = "/processing/ROIs/DfOverF"
+        dff_ts.set_value("segmentation_interface_path", interface_path)
+        dff_ts.set_value("segmentation_interface", dff_iface)
+        ts_path = interface_path + '/' + image_plane + '/' + str(pid)
+        dff_ts.set_path(ts_path)
+        dff_iface.add_timeseries(dff_ts)
+        dff_roi_path = ts_path
+        dff_roi_grp = nwb_object.file_pointer.create_group(dff_roi_path)
         dff_roi_grp.create_dataset("trial_ids", data=dff_trials)
 
 # ------------------------------------------------------------------------------
@@ -362,6 +414,8 @@ def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type,
             if options.verbose:
                 print series_name + " has %d nans (removed)" % (lent - len(t))
 
+#       print "\nt=", t
+#       print "var=", var
         if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
                        "rewardCue", "touches"]:
             # times are stored as 'on' in even intervals, 'off' in odd intervals
@@ -653,21 +707,26 @@ def process_whisker(orig_h5, nwb_object, options):
     t = grp["eventTimes/1/1"].value * 0.001
     description = "Intervals that whisker touches pole (protract)"
     source = "Intervals are as reported in somatosensory cortex data file"
-    pole_touch_pr = create_behavioral_time_series(nwb_object, hash_folder, \
-                        keyName, "IntervalSeries", "pole_touch_protract", \
-                        t, '', description, source, options)
-    pole_iface.add_timeseries(pole_touch_pr)
+    num_ts = 0
+    if len(t) > 0:
+        pole_touch_pr = create_behavioral_time_series(nwb_object, hash_folder, \
+                            keyName, "IntervalSeries", "pole_touch_protract", \
+                            t, '', description, source, options)
+        pole_iface.add_timeseries(pole_touch_pr)
+        num_ts = num_ts + 1
 
-    # retraction touches
+        # retraction touches
 # GD
     t = grp["eventTimes/2/2"].value * 0.001
     description = "Intervals that whisker touches pole (retract)"
-    pole_touch_re = create_behavioral_time_series(nwb_object, hash_folder, \
-                        keyName, "IntervalSeries", "pole_touch_retract", \
-                        t, '', description, source, options)
-    pole_iface.add_timeseries(pole_touch_re)
-
-    mod.finalize()
+    if len(t) > 0:
+        pole_touch_re = create_behavioral_time_series(nwb_object, hash_folder, \
+                            keyName, "IntervalSeries", "pole_touch_retract", \
+                            t, '', description, source, options)
+        pole_iface.add_timeseries(pole_touch_re)
+        num_ts = num_ts + 1
+    if num_ts > 0:
+        mod.finalize()
 
 # ------------------------------------------------------------------------------
 
@@ -678,14 +737,20 @@ def process_pole_touches(orig_h5, nwb_object):
     kappa_ma_pr = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/1", keyName2)
     pole_tp_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_protract"
-    pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
-    pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
+    try:
+        pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
+        pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
+    except:
+        print "Cannot create dataset processing/Whisker/BehavioralTimeSeries/pole_touch_protract/kappa_max_abs_over_touch"
     # add kappaMaxAbsOverTouch to pole_touch_retract
     kappa_ma_re = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/2", keyName2)
     pole_tr_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_retract"
-    pole_tr_grp = nwb_object.file_pointer[pole_tr_path]
-    pole_tr_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_re)
+    try:
+        pole_tr_grp = nwb_object.file_pointer[pole_tr_path]
+        pole_tr_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_re)
+    except: 
+        print "Cannot create dataset processing/Whisker/BehavioralTimeSeries/pole_touch_retract/kappa_max_abs_over_touch"
 
 # ------------------------------------------------------------------------------
 
@@ -772,10 +837,16 @@ def create_trials(orig_h5, nwb_object):
                          "pole_touch_protract" :  "Whisker", "pole_touch_retract" :  "Whisker"}
             for key in events:
                 ts_path = "/processing/" + events[key] + "/BehavioralEvents/" + key
-                epoch.add_timeseries(key, ts_path)
+                try:
+                    epoch.add_timeseries(key, ts_path)
+                except:
+                    print "Cannot add event time series " + ts_path
             for key in intervals:
                 ts_path = "/processing/" + intervals[key] + "/BehavioralTimeSeries/" + key
-                epoch.add_timeseries(key, ts_path)
+                try:
+                    epoch.add_timeseries(key, ts_path)
+                except:
+                    print "Cannot add interval time series " + ts_path
             epoch.finalize()
 
 # ------------------------------------------------------------------------------
@@ -830,10 +901,13 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map):
                     s = "processing/ROIs/DfOverF/%s/%s" % (imaging_plane, roi)
                     roi_list.append(ids[k])
                     plane_list.append(imaging_plane)
-                grp = nwb_object.file_pointer["epochs/" + trial_name]
-                grp.create_dataset("ROIs", data=roi_list)
-                grp.create_dataset("ROI_planes", data=plane_list)
-                grp.attrs["valid_whisker_data"]
+                try:
+                    grp = nwb_object.file_pointer["epochs/" + trial_name]
+                    grp.create_dataset("ROIs", data=roi_list)
+                    grp.create_dataset("ROI_planes", data=plane_list)
+                    grp.attrs["valid_whisker_data"]
+                except:
+                    print "Cannot create group epochs/" + trial_name
         else:
             print "  Warning: in create_trial_roi_map num_planes == 1"
 
@@ -848,7 +922,6 @@ def get_trial_types(orig_h5, nwb_object):
     if "PhotostimulationType" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
         # NL data
         photostim_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], "PhotostimulationType")
-        print "photostim_types=", photostim_types
         num_trial_types = 8
     else:
         # SP data
@@ -898,9 +971,14 @@ def get_trial_types(orig_h5, nwb_object):
 def get_valid_trials(orig_h5, data):
     ts_path = "timeSeriesArrayHash/descrHash/"
     val = []
-    num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    num_subareas = 1
+    if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+        num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
     if data == "whisker":
-        ids = parse_h5_obj(orig_h5[ts_path + '1/value'])[0]
+        if num_subareas > 1:
+            ids = parse_h5_obj(orig_h5[ts_path + '1/value'])[0]
+        else:
+            ids = parse_h5_obj(orig_h5[ts_path + 'value'])[0]
         # ids = list(orig_h5[ts_path + "1/value/value"].value)
         val = val + list(ids)
         val = list(Set(val))
@@ -1110,16 +1188,26 @@ def create_epochs(orig_h5, nwb_object, options):
 def process_image_data(orig_h5, nwb_object, plane_map):
     # store master images
     print "Creating reference images"
-    num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    if not '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+        print "Cannot process image data"
+        return
+    else:
+        num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
     for subarea in range(num_subareas):
-        plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
+        if num_subareas > 1:
+            plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
+        else:
+            plane_path = 'timeSeriesArrayHash/descrHash/value'
         if orig_h5[plane_path].keys()[0] == 'masterImage':
             num_planes = 1
         else:
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
             sys.stdout.write('_')
+# GD: strange: the two loops are almost exactly repeated
+#     the role of the 1st set of loops is just to wrire symbol '_' ti screen ?!!
     print ""
+    master_shape = {}
     for subarea in range(num_subareas):
         plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
         if orig_h5[plane_path].keys()[0] == 'masterImage':
@@ -1127,7 +1215,9 @@ def process_image_data(orig_h5, nwb_object, plane_map):
         else:
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
-            create_reference_image(orig_h5, nwb_object, plane_map, subarea+1, plane+1, num_planes)
+            master_shape = create_reference_image(orig_h5, nwb_object, \
+                               master_shape, plane_map,subarea+1, \
+                               plane+1, num_planes) 
             sys.stdout.write('.')
             sys.stdout.flush()
     print ""
@@ -1137,6 +1227,9 @@ def process_image_data(orig_h5, nwb_object, plane_map):
     dff_iface = mod.create_interface("DfOverF")
     dff_iface.set_source("2Photon time series under acquisition are the bases for these ROIs. Those time series are named similarly to the image planes")
     seg_iface = mod.create_interface("ImageSegmentation")
+    # GD storing imaging planes info
+    for plane in plane_map.keys():
+        seg_iface.create_imaging_plane(plane_map[plane], plane)
     # pull out image segmentation data. do it by subarea and imaging plane,
     #   as that's how data is stored in the source file
     print "Reading ROI and dF/F"
@@ -1156,8 +1249,10 @@ def process_image_data(orig_h5, nwb_object, plane_map):
         else:
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
-            fetch_rois(orig_h5,             plane_map, seg_iface, subarea+1, plane+1, num_planes)
-            fetch_dff( orig_h5, nwb_object, plane_map, dff_iface, subarea+1, plane+1, num_planes)
+            fetch_rois(orig_h5, master_shape, plane_map, seg_iface, subarea+1, \
+                       plane+1, num_planes)
+            fetch_dff( orig_h5, nwb_object,   plane_map, dff_iface, subarea+1, \
+                       plane+1, num_planes)
 
             sys.stdout.write('.')
             sys.stdout.flush()
@@ -1215,7 +1310,11 @@ def process_image_data(orig_h5, nwb_object, plane_map):
             #                 pgrp = grp
             #             else:
             #                 pgrp = grp["%d"%(plane+1)]
-            pgrp = grp["%d"%(plane+1)]
+            try:
+                pgrp = grp["%d"%(plane+1)]
+            except:
+                # Warning: only one imaging plane is available (instead of 3)
+                pgrp = grp
             frame_idx = pgrp["sourceFileFrameIdx"]["sourceFileFrameIdx"].value
             lst = parse_h5_obj(pgrp["sourceFileList"])[0]
             cnt = 0
@@ -1251,18 +1350,23 @@ def process_image_data(orig_h5, nwb_object, plane_map):
                     name = "%s_%d" % (nname, filenum)
                     fname = srcfile["%d"%filenum]
                 # make sure frames and file numbers are sequential
+                if not (lastfile == filenum and framenum == lastframe+1) and not framenum == 1:
+                    # Warning: framenum or filenum does not start from 1
+                    continue
+#               print "\nsubarea=", subarea, " i=", i, " plane=", plane, " lastfile=", lastfile, " filenum=", filenum, \
+#                     " framenum=", framenum, " lastframe=", lastframe, " name=", name, " fname=", fname, " nname=", nname
                 assert (lastfile == filenum and framenum == lastframe+1) or framenum == 1
                 if lastfile != filenum:
                     if i>0:
                         if not np.isnan(frame_idx[0][i-1] ) and not np.isnan(frame_idx[1][i-1]):
-                            create_2p_ts(nwb_object, name, fname, stack_t, plane)
+                            create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
                             stack_t = []
                             fname = None
                 lastframe = framenum
                 lastfile = filenum
             # make sure we write out the last entry
             if fname is not None:
-                create_2p_ts(nwb_object, name, fname, stack_t, plane)
+                create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
             sys.stdout.write('.')
             sys.stdout.flush()
 
@@ -1329,7 +1433,7 @@ def get_description(meta_h5, options):
 
 def add_shank_group(nwb_object, meta_h5, name, location, \
                     description_data, options):
-    group_path = nwbco.EXTRA_CUSTOM(name)
+    group_path = "/general/" + nwbco.EXTRA_CUSTOM(name)
     grp = nwb_object.file_pointer.create_group(group_path)
 #   print "description_data=", description_data
     grp.create_dataset("description", data=description_data)
@@ -1354,14 +1458,14 @@ def process_ephys_electrode_map(nwb_object, meta_h5, options):
 
     # Creating dataset "electrode_map"
     probe = M.tolist()
-    map_ephys = fp.create_dataset(nwbco.EXTRA_ELECTRODE_MAP, data=probe) # dataset
+    map_ephys = fp.create_dataset("/general/" + nwbco.EXTRA_ELECTRODE_MAP, data=probe) # dataset
 
     # Creating dataset "electrode_group"
     sz = 0
     for i in range(len(shank)):
         sz = max(sz, len(shank[i]))
     stype = "S%d" % (sz + 1)
-    dset = fp.create_dataset(nwbco.EXTRA_ELECTRODE_GROUP, (len(shank),), dtype=stype)
+    dset = fp.create_dataset("/general/" + nwbco.EXTRA_ELECTRODE_GROUP, (len(shank),), dtype=stype)
     for i in range(len(shank)):
         dset[i] = shank[i]
 

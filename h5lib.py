@@ -11,6 +11,28 @@ def get_child_group_names(parent_group_pointer):
 
 # ------------------------------------------------------------------------------
 
+def get_group_keys(group_pointer):
+    key_list = []
+    for k in group_pointer.keys():
+        if not re.search('#', k):
+            key_list.append(k)
+    return sorted(key_list)
+
+# ------------------------------------------------------------------------------
+
+def get_data_from_refs_dataset(orig_h5, dataset_pointer):
+    path = dataset_pointer.name
+    if dataset_pointer.dtype.kind == 'O':
+        ref = orig_h5[path][0][0]
+        obj = orig_h5[ref]
+        value = ''.join(i for i in obj[:])
+    else:
+        obj = orig_h5[path]
+        value = ''.join(i.encode(ascii) for i in obj[:])
+    return value
+
+# ------------------------------------------------------------------------------
+
 def get_key_list(hash_group_pointer):
     keyNames_dataset = hash_group_pointer['keyNames/keyNames']
     key_list = np.array(keyNames_dataset).tolist()
@@ -31,38 +53,80 @@ def get_value_by_key(hash_group_pointer, key):
             key_name = k
     if verbose:
         print "In get_value_by_key: key_name=", key_name, "\n"
-    ind = key_list.index(key_name) + 1
+    ind = key_list.index(key_name)
     if verbose:
         print "ind=", ind, "\n"
     value_group = hash_group_pointer['value']
     if verbose:
-        print "In get_value_by_key: value_group.name=",  value_group.name
-        print "                     value_group.keys()=", value_group.keys()
-    if unicode(ind) in value_group.keys():
-        value_pointer = value_group[str(ind) + '/' + str(ind)]
-        if verbose:
-            print "item_type(value_pointer)=", item_type(value_pointer)
-            print "In get_value_by_key: return value name=", value_pointer.name
+        print "\nIn get_value_by_key: value_group.name=",  value_group.name
+        print "\n                   value_group.keys()=", value_group.keys()
+        print "\nlen(value_group.keys())=", len(value_group.keys()), " ind=", ind  
+    if len(value_group.keys()) == 1 and "value" in value_group.keys():
+        value_pointer = value_group['value']
         if item_type(value_pointer) == "dataset":
-            value = np.array(value_pointer).tolist()
+            if verbose:
+                print "Case1: returning an element of a dataset"
+            value = value_pointer[ind]
+        else:
+            if verbose:
+                print "Case2: value/value type is ", item_type(value_pointer)
+            sys.exit("Unsapported case in get_value_by_key()")
     else:
-        value = value_group['value'][ind]
         if verbose:
-            print "In get_value_by_key: return value name=", value
+            print "level2 key_list=", value_group.keys(), ";  ind+1=", ind+1
+        if str(ind+1) in value_group.keys():
+            value_pointer = value_group[str(ind+1)]
+            if item_type(value_pointer) == "dataset":
+                if verbose:
+                    print "Case3: value/" + str(ind+1) + " is a dataset"
+                value = np.array(value_pointer).tolist()
+            else:
+                if str(ind+1) in value_pointer.keys() and \
+                   item_type(value_pointer[str(ind+1)]) == "dataset":
+                    if verbose:
+                        print "Case4: value/" + str(ind+1) + "/" + str(ind+1) + " is ", item_type(value_pointer)
+                    value = np.array(value_pointer[str(ind+1)]).tolist()
+                else:
+                    if verbose:
+                        print "Case5: value/" + str(ind+1) + " is ", item_type(value_pointer)
+                    value =  value_pointer
+        else:
+            value = value_group
     return value
 
 # ------------------------------------------------------------------------------
 
-def get_value_path_by_partial_key(hash_group_pointer, partial_key):
-    key_list = get_key_list(hash_group_pointer)
+def get_value2_by_key2(hash_group1_pointer, key1, hash_group2, key2):
+    if verbose:
+        print "\n\nEntering get_value2_by_key2 ..."
+    key_list = get_key_list(hash_group1_pointer)
     key_name = ""
     for k in key_list:
-        if re.search(partial_key, k):
+        if re.search(key1, k):
             key_name = k
+    if verbose:
+        print "In get_value_by_key: key_name=", key_name, "\n"
     ind = key_list.index(key_name)
-    value_group = hash_group_pointer['value/value']
-    value_name = value_group[ind]
-    return value_name
+    if verbose:
+        print "ind=", ind, "\n"
+    value_group = hash_group1_pointer['value']
+    if verbose:
+        print "\nIn get_value_by_key: value_group.name=",  value_group.name
+        print "\n                   value_group.keys()=", value_group.keys()
+        print "\nlen(value_group.keys())=", len(value_group.keys()), " ind=", ind
+        print "In get_value2_by_key2: level2 key_list=", value_group.keys()
+    if str(ind+1) in value_group.keys():
+        value_pointer = value_group[str(ind+1)]
+        if verbose:
+            print "value_pointer.keys()=", value_pointer.keys(), "; hash_group2=", hash_group2
+#       if hash_group2 in value_pointer.keys():
+            print "\nhash_group2=", hash_group2
+        try:
+            value_pointer2 = value_pointer[hash_group2]
+            value2 = get_value_by_key(value_pointer2, key2)
+        except:
+            sys.exit("\nCannot determine value2 in get_value2_by_key2")
+    return value2
 
 # ------------------------------------------------------------------------------
 
@@ -74,8 +138,10 @@ def get_value_pointer_by_path_items(orig_h5, path_items):
                 path += path_items[i]
             else:
                 path += '/' + path_items[i]
+        if verbose:
+            print "path=", path
         value_pointer = orig_h5[path]
-#       print "path=", path, " value=", value_pointer
+#       print "value=", value_pointer
     else:
         value_pointer = orig_h5
     if verbose:
@@ -132,9 +198,10 @@ def get_description_by_key(hash_group_pointer, partial_key):
     ind = get_key_index(key_list, partial_key) + 1
     descr_data = np.array(hash_group_pointer['descr/descr']).tolist()
     if verbose:
-        print "   In get_description_by_key: descr_data_items=", descr_data, " ind=", ind
-        print "Function get_description_by_key returns: ", descr_data[ind-1]
-    return descr_data[ind]
+        print "\nIn get_description_by_key: len(descr_data)=", len(descr_data), \
+              "\n     descr_data_items=", descr_data, " ind=", ind
+        print "\nFunction get_description_by_key returns: ", descr_data[ind-1]
+    return descr_data[ind-1]
 
 # ------------------------------------------------------------------------------
 
