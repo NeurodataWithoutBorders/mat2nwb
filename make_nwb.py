@@ -99,15 +99,15 @@ def create_plane_map(orig_h5, plane_map):
 #       disp(['path10=' 'timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]);
 #       disp(['path20=' 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]);
         try:
-            if num_subareas == 1:
+            grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
+            grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
+        except:
+            try:
                 grp = orig_h5['timeSeriesArrayHash/value/imagingPlane']
                 grp2 = orig_h5['timeSeriesArrayHash/descrHash/value']
-            else:
-                grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
-                grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
-        except:
-            print "Cannot create plane map"
-            break
+            except:
+                print "Cannot create plane map"
+                break
         if grp2.keys()[0] == 'masterImage':
             num_planes = 1
         else:
@@ -288,32 +288,32 @@ def fetch_rois(orig_h5, master_shape, plane_map, seg_iface, area, plane, \
         ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
     roi_ids = ids["ids"].value
     lookup = tsah["value"]["%d"%(area+1)]["ids"]["ids"].value
-    rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]
-    if str(plane) in rois.keys():
-        rois = rois["%d"%plane]
-#   print " area=", area, " plane=", plane, " num_planes=", num_planes
-    if "rois" in rois.keys() and len(rois["rois"].keys()) > 0:
-        for i in range(len(roi_ids)):
-            rid = roi_ids[i]
-            # make sure the ROI id is correct
-#           print "i=", i, " area=", area, " plane=", plane, " num_planes=", num_planes
+    for i in range(len(roi_ids)):
+        rid = roi_ids[i]
+        if num_planes == 1:
+            rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]
+        else:
+            rois = tsah["descrHash"]["%d"%(area+1)]["value"]["1"]["%d"%plane]
+        # make sure the ROI id is correct
+        try:
             record = rois["rois"]["%s"%(1+i)]
             x = int(parse_h5_obj(record["id"])[0])
             assert x == int(rid)
-            pix = parse_h5_obj(record["indicesWithinImage"])[0]
-            # pix = record["indicesWithinImage/indicesWithinImage"].value
-            pixmap = []
-            for j in range(len(pix)):
-                v = pix[j]
-                px = int(v  / master1_shape[1])
-                py = int(v) % master1_shape[0]
-                pixmap.append([py,px])
-            weight = np.zeros(len(pixmap)) + 1.0
-#           print "image_plane=", image_plane, " oname=", oname
-            seg_iface.add_roi_mask_pixels(image_plane, "%d"%x, "ROI %d"%x, pixmap, \
-                weight, master1_shape[1], master1_shape[0])
-    else:
-        print "Cannot handle rois for area=", area, " plane=", plane
+        except:
+            print "Missing ROI for area=", area, " plane=", plane, " id=", i
+            continue
+        pix = parse_h5_obj(record["indicesWithinImage"])[0]
+        # pix = record["indicesWithinImage/indicesWithinImage"].value
+        pixmap = []
+        for j in range(len(pix)):
+            v = pix[j]
+            px = int(v  / master1_shape[1])
+            py = int(v) % master1_shape[0]
+            pixmap.append([py,px])
+        weight = np.zeros(len(pixmap)) + 1.0
+#       print "image_plane=", image_plane, " oname=", oname
+        seg_iface.add_roi_mask_pixels(image_plane, "%d"%x, "ROI %d"%x, pixmap, \
+            weight, master1_shape[1], master1_shape[0])
 
 # ------------------------------------------------------------------------------
 
@@ -846,7 +846,7 @@ def create_trials(orig_h5, nwb_object):
                 try:
                     epoch.add_timeseries(key, ts_path)
                 except:
-                    print "Cannot add interval time series " + ts_path
+                    print "Cannot add time series " + ts_path
             epoch.finalize()
 
 # ------------------------------------------------------------------------------
@@ -903,11 +903,11 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map):
                     plane_list.append(imaging_plane)
                 try:
                     grp = nwb_object.file_pointer["epochs/" + trial_name]
-                    grp.create_dataset("ROIs", data=roi_list)
-                    grp.create_dataset("ROI_planes", data=plane_list)
                     grp.attrs["valid_whisker_data"]
                 except:
-                    print "Cannot create group epochs/" + trial_name
+                    grp = nwb_object.file_pointer.create_group("epochs/" + trial_name)
+                grp.create_dataset("ROIs", data=roi_list)
+                grp.create_dataset("ROI_planes", data=plane_list)
         else:
             print "  Warning: in create_trial_roi_map num_planes == 1"
 
@@ -975,11 +975,10 @@ def get_valid_trials(orig_h5, data):
     if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
         num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
     if data == "whisker":
-        if num_subareas > 1:
+        try:                      
             ids = parse_h5_obj(orig_h5[ts_path + '1/value'])[0]
-        else:
+        except:
             ids = parse_h5_obj(orig_h5[ts_path + 'value'])[0]
-        # ids = list(orig_h5[ts_path + "1/value/value"].value)
         val = val + list(ids)
         val = list(Set(val))
     if data == "Ca":
@@ -1188,16 +1187,9 @@ def create_epochs(orig_h5, nwb_object, options):
 def process_image_data(orig_h5, nwb_object, plane_map):
     # store master images
     print "Creating reference images"
-    if not '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
-        print "Cannot process image data"
-        return
-    else:
-        num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
     for subarea in range(num_subareas):
-        if num_subareas > 1:
-            plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
-        else:
-            plane_path = 'timeSeriesArrayHash/descrHash/value'
+        plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
         if orig_h5[plane_path].keys()[0] == 'masterImage':
             num_planes = 1
         else:
@@ -1705,7 +1697,9 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
         # SP data
         plane_map = {}
         create_plane_map(orig_h5, plane_map)
-        process_image_data(orig_h5, nwb_object, plane_map)
+        print "After create_plane_map: plane_map=", plane_map
+        if len(plane_map.keys()) > 0:
+            process_image_data(orig_h5, nwb_object, plane_map)
     else:
         # NL data
         process_ephys_electrode_map(nwb_object, meta_h5, options)
