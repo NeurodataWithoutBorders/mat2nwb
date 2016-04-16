@@ -34,8 +34,11 @@ def get_data_from_refs_dataset(orig_h5, dataset_pointer):
 # ------------------------------------------------------------------------------
 
 def get_key_list(hash_group_pointer):
-    keyNames_dataset = hash_group_pointer['keyNames/keyNames']
-    key_list = np.array(keyNames_dataset).tolist()
+    try:
+        keyNames_dataset = hash_group_pointer['keyNames/keyNames']
+        key_list = np.array(keyNames_dataset).tolist()
+    except:
+        key_list = []
     return key_list                                         
 
 # ------------------------------------------------------------------------------
