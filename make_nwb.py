@@ -27,7 +27,8 @@ import h5lib
 # ------------------------------------------------------------------------------
 
 def make_nwb_command_line_parser(parser):
-    parser.add_option("-D", "--debug",     action="store_true", dest="debug", help="output debugging info", default=False)
+    parser.add_option("-D", "--debug",   action="store_true",  dest="debug", help="output debugging info", default=False)
+    parser.add_option("-e", "--no_error_handling", action="store_false", dest="handle_errors", help="handle_errors", default=True)
     parser.add_option("-o", "--outfolder", dest="output_folder", help="output folder (default=same as input folder)",metavar="output_folder",default="")
     parser.add_option("-r", "--replace",   action="store_true", dest="replace", help="if the output file already exists, replace it", default=False)
     parser.add_option("-v", "--verbose",   action="store_true", dest="verbose", help="increase the verbosity level of output", default=False)
@@ -77,7 +78,7 @@ def parse_h5_obj(obj, level = 0, output = [], verbose = 0):
 #   files. create a map between the h5 plane name and the 
 #   identifier used between files
 # plane_map = {}
-def add_plane_map_entry(plane_map, h5_plane_name, filename):
+def add_plane_map_entry(plane_map, h5_plane_name, filename, options):
     toks = filename.split("fov_")
     if len(toks) != 2:
         print "Error parsing %s for imaging plane name" % filename
@@ -90,24 +91,33 @@ def add_plane_map_entry(plane_map, h5_plane_name, filename):
 
 # ------------------------------------------------------------------------------
 
-def create_plane_map(orig_h5, plane_map):
-    num_subareas = 1
-    if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+def create_plane_map(orig_h5, plane_map, options):
+    if options.handle_errors:
+        num_subareas = 1
+        if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+            num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    else:
         num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+
     for subarea in range(num_subareas):
         # fetch time array
 #       disp(['path10=' 'timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]);
 #       disp(['path20=' 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]);
-        try:
+        if options.handle_errors:
+            try:
+                grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
+                grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
+            except:
+                try:
+                    grp = orig_h5['timeSeriesArrayHash/value/imagingPlane']
+                    grp2 = orig_h5['timeSeriesArrayHash/descrHash/value']
+                except:
+                    print "Cannot create plane map"
+                    break
+        else:
             grp = orig_h5['timeSeriesArrayHash/value/%d/imagingPlane' %(subarea + 2)]
             grp2 = orig_h5['timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)]
-        except:
-            try:
-                grp = orig_h5['timeSeriesArrayHash/value/imagingPlane']
-                grp2 = orig_h5['timeSeriesArrayHash/descrHash/value']
-            except:
-                print "Cannot create plane map"
-                break
+
         if grp2.keys()[0] == 'masterImage':
             num_planes = 1
         else:
@@ -118,18 +128,22 @@ def create_plane_map(orig_h5, plane_map):
             # else:
             #     pgrp = grp["%d"%(plane+1)]
 #           print "\nsubarea=", subarea, " plane=", plane
-            try:
+            if options.handle_errors:
+                try:
+                    pgrp = grp["%d"%(plane+1)]
+                except:
+                    # Warning: only one imaging plane available (instead of 3)
+                    pgrp = grp
+            else:
                 pgrp = grp["%d"%(plane+1)]
-            except:
-                # Warning: only one imaging plane available (instead of 3)
-                pgrp = grp
+
             old_name = "area%d_plane%d" % (subarea+1, plane+1)
             frame_idx = pgrp["sourceFileFrameIdx"]["sourceFileFrameIdx"].value
             lst = parse_h5_obj(pgrp["sourceFileList"])[0]
             for k in lst:
                 # srcfile = str(lst[k][k].value)
                 srcfile = str(k)
-                add_plane_map_entry(plane_map, old_name, srcfile)
+                add_plane_map_entry(plane_map, old_name, srcfile, options)
                 break
 
 # ------------------------------------------------------------------------------
@@ -137,6 +151,7 @@ def create_plane_map(orig_h5, plane_map):
 # fetch start time/date of experiment
 def find_exp_time(input_h5):
     # SP data
+    child_groups = h5lib.get_child_group_names(input_h5)
     if "metaDataHash" in h5lib.get_child_group_names(input_h5):
         d = h5lib.get_value_by_key(input_h5['/metaDataHash'], \
                          "dateOfExperiment")
@@ -156,10 +171,10 @@ def find_exp_time(input_h5):
                          ["timeOfExperiment", "timeOfExperiment"])).tolist()[0]
         except:
             # Python3 version of .h5 file
-            print "date=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
-                         ["dateOfExperiment"])).tolist()
-            print "time=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
-                         ["timeOfExperiment"])).tolist()
+#           print "date=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+#                        ["dateOfExperiment"])).tolist()
+#           print "time=", np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+#                        ["timeOfExperiment"])).tolist()
             d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
                          ["dateOfExperiment"])).tolist()[0]
             t = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
@@ -167,6 +182,12 @@ def find_exp_time(input_h5):
 #       print "d=", d
 #       print "t=", t
         dt=datetime.datetime.strptime(d+t, "%Y%m%d%H%M%S")
+    # JY data
+    elif "date" in h5lib.get_child_group_names(input_h5):
+        d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+                         ["date", "date"])).tolist()[0]
+#       print "date=", "20"+d
+        dt = datetime.datetime.strptime("20"+d, "%Y%m%d")
     else:
         sys.exit("Cannot extract date and time from input data")
        
@@ -178,29 +199,26 @@ def find_exp_time(input_h5):
 # use junk values for 2-photon metadata, for now at least
 def create_2p_ts(nwb_object, name, fname, stack_t, plane, imaging_plane):
     zero = np.zeros(1)
-    try:
-        twop = nwb_object.create_timeseries("TwoPhotonSeries", name, modality="acquisition")
-        twop.set_value("voltage", 0)
-        twop.set_value("max_voltage", 0)
-        twop.set_value("min_voltage", 0)
-        twop.set_value("bits_per_pixel", 16)
-        twop.set_value("pmt_gain",.650)
-        twop.set_value("wavelength", 1000.0)
-        twop.set_value("indicator", "GCaMP6s")
-        twop.set_value("imaging_depth", 0.150+0.1*plane)
-        twop.set_value("scan_line_rate", 16000)
-        twop.set_value("field_of_view", [ 600e-6, 600e-6 ])
-        twop.set_value("orientation", "rostral is image top")
-        twop.set_value("format", "external")
-        twop.set_value("dimension", [512, 512, 1])
-        twop.set_value("distance", .15)
-        twop.set_value("external_file", fname)
-        twop.set_value("imaging_plane", imaging_plane)
-        twop.set_time(stack_t)
-        twop.set_data(zero, "None", 1, 1)
-        twop.finalize()
-    except:
-        print "Warning: unable to create_2p_ts for name=", name
+    twop = nwb_object.create_timeseries("TwoPhotonSeries", name, modality="acquisition")
+    twop.set_value("voltage", 0)
+    twop.set_value("max_voltage", 0)
+    twop.set_value("min_voltage", 0)
+    twop.set_value("bits_per_pixel", 16)
+    twop.set_value("pmt_gain",.650)
+    twop.set_value("wavelength", 1000.0)
+    twop.set_value("indicator", "GCaMP6s")
+    twop.set_value("imaging_depth", 0.150+0.1*plane)
+    twop.set_value("scan_line_rate", 16000)
+    twop.set_value("field_of_view", [ 600e-6, 600e-6 ])
+    twop.set_value("orientation", "rostral is image top")
+    twop.set_value("format", "external")
+    twop.set_value("dimension", [512, 512, 1])
+    twop.set_value("distance", .15)
+    twop.set_value("external_file", fname)
+    twop.set_value("imaging_plane", imaging_plane)
+    twop.set_time(stack_t)
+    twop.set_data(zero, "None", 1, 1)
+    twop.finalize()
 
 # ------------------------------------------------------------------------------
 
@@ -225,7 +243,7 @@ def create_aq_ts(nwb_object, name, modality, timestamps, rate, data, comments = 
 reference_image_red = {}
 reference_image_green = {}
 def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
-                           plane, num_plane = 3):
+                           plane, options, num_plane = 3):
     area_grp = orig_h5["timeSeriesArrayHash/descrHash"]["%d"%(1+area)]
     if num_plane == 1:
         plane_grp = area_grp["value/1"]
@@ -238,7 +256,7 @@ def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
 #   print "\nmaster1_shape=", master1_shape
     for i in range(master1_shape[0]):
         for j in range(master1_shape[1]):
-            if len(master1_shape) == 3:
+            if len(master1_shape) == 3 or not options.handle_errors:
                 green[i][j] = master[i][j][0]
                 red[i][j]   = master[i][j][1]
             else:
@@ -267,7 +285,7 @@ def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
 # pull out all ROI pixel maps for a particular subarea and imaging plane
 #   and store these in the segmentation module
 def fetch_rois(orig_h5, master_shape, plane_map, seg_iface, area, plane, \
-               num_planes=3):
+               options, num_planes=3):
     tsah = orig_h5["timeSeriesArrayHash"]
     # convert from file-specific area/plane mapping to
     #   inter-session naming convention
@@ -277,15 +295,15 @@ def fetch_rois(orig_h5, master_shape, plane_map, seg_iface, area, plane, \
     image_plane = plane_map[oname]           
 
     # first get the list of ROIs for this subarea and plane
-    # if num_planes == 1:
-    #     ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
-    # else:
-    #     ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
-    try:
+    if options.handle_errors:
+        try:
+            ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
+        except:
+            # Warning: only one imaging plane is available (instead of 3)
+            ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
+    else:
         ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["%d"%plane]["ids"]
-    except:
-        # Warning: only one imaging plane is available (instead of 3)
-        ids = tsah["value"]["%d"%(area+1)]["imagingPlane"]["ids"]
+
     roi_ids = ids["ids"].value
     lookup = tsah["value"]["%d"%(area+1)]["ids"]["ids"].value
     for i in range(len(roi_ids)):
@@ -323,17 +341,18 @@ def fetch_rois(orig_h5, master_shape, plane_map, seg_iface, area, plane, \
 #        tsah::value::[2-7]::imagingPlane::[1-3]::ids::ids
 # time for dF/F samples
 #        tsah::value::[2-7]::valueMatrix
-def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, num_planes=3):
+def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, \
+              options, num_planes=3):
     area_grp = orig_h5["timeSeriesArrayHash/value"]["%d"%(area+1)]
-    # if num_planes == 1:
-    #         plane_ids = area_grp["imagingPlane"]["ids/ids"].value
-    #     else:
-    #         plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
-    try:
+    if options.handle_errors:
+        try:
+            plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
+        except:
+            # Warning: only one imaging plane is available (instead of 3)
+            plane_ids = area_grp["imagingPlane"]["ids/ids"].value
+    else:
         plane_ids = area_grp["imagingPlane"]["%d"%plane]["ids/ids"].value
-    except:
-        # Warning: only one imaging plane is available (instead of 3)
-        plane_ids = area_grp["imagingPlane"]["ids/ids"].value
+
     area_ids = area_grp["ids/ids"].value
     values = area_grp["valueMatrix/valueMatrix"].value
     # convert from file-specific area/plane mapping to
@@ -385,34 +404,31 @@ def fetch_dff(orig_h5, nwb_object, plane_map, dff_iface, area, plane, num_planes
 
 # ------------------------------------------------------------------------------
 
-def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type, \
-                                  series_name, t, var, description, source, \
-                                  options):
+# NOTE: argument t has different meaning depending on the keyName
+#       (it may bne either start time or actual time)
+def create_time_series(orig_h5, nwb_object, hash_group , keyName, series_type, \
+                       series_name, t, var, description, source, options):
     # initialize timeseries
     ts = nwb_object.create_timeseries(series_type, series_name)
     if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
                    "rewardCue",   "leftLicks", "rightLicks", "whiskerVars", \
-                   "touches"]:
+                   "touches", "Ephys"]:
         # SP data
         if var == '':
-            samples = 0
-            for i in range(len(t)):
-                if np.isnan(t[i]):
-                    continue
-                samples += 1
-            assert samples == len(t), "NaNs found when reading " + series_name
-        else:
-            clean_var = []
-            clean_t   = []
-            lent = len(t)
-            for i in range(lent):
-                if not np.isnan(t[i]) and not np.isnan(var[i]):
-                    clean_var.append(var[i])
-                    clean_t.append(t[i])
-            t   = np.array(clean_t)
-            var = np.array(clean_var)
+            t_not_nan = t[np.isfinite(np.array(t))]
             if options.verbose:
-                print series_name + " has %d nans (removed)" % (lent - len(t))
+                print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
+            t = t_not_nan
+        else:
+            t_not_nan = t[np.isfinite(np.array(t)) & np.isfinite(np.array(var))]
+            v_not_nan =     var[np.isfinite(np.array(t)) & np.isfinite(np.array(var))]
+            if options.verbose:
+                print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
+            t = t_not_nan
+            var     = v_not_nan
+            
+        if options.verbose:
+            print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
 
 #       print "\nt=", t
 #       print "var=", var
@@ -425,13 +441,28 @@ def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type,
             on_off += -1
             on_off[::2] *= -1
             ts.set_data(on_off)
-        elif keyName in ["whiskerVar"]:
+            vgrp = h5lib.get_value_by_key(hash_group, keyName)
+            if 'eventTrials' in vgrp.keys():
+                try:
+                    ts.set_value('trials', vgrp['eventTrials/eventTrials'].value)
+                except:
+                    try:
+                        ts.set_value('trials', vgrp['eventTrials/1/1'].value)
+                    except:
+                        print "Cannot set trials attribute to the time seties for keyName=", keyName
+        elif keyName in ["whiskerVars"]:
             if series_name == "whisker_angle":
 # GD unit, conversion and resolution should be read in from input file
                 ts.set_data(var, unit="degrees", conversion=1, resolution=0.001)
             else:
 # GD what is the unit for curvature?
                 ts.set_data(var, "Unknown", 1, 1)
+            if 'trial' in hash_group["value/1"].keys():
+                trial = hash_group["value/1/trial/trial"].value
+                ts.set_value('trials', trial)
+        elif keyName == "E$phys":
+            ts.set_data(var, "mV", 1, 1)
+            ts.set_value("electrode_idx", "")
         else: 
             # keyName in ["leftLicks", "rightLicks"]
             # there's no meaningful entries to store in data[], as events are binary
@@ -440,12 +471,40 @@ def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type,
             data += 1
             ts.set_data(data, "Licks", 1, 1)
         ts.set_time(t)
+    elif keyName in ["PoleInTime", "PoleOutTime", "CueTime", "LickTime"]:
+        if keyName == "LickTime":
+            # JY data
+            grp = h5lib.get_value_by_key(hash_group, keyName)
+            time = []
+#           print "\ngrp.keys()=", grp.keys()
+            for k in sorted([int(k) for k in grp.keys()]):
+#               dt = grp[str(k) + "/" + str(k)].value * 0.001
+                dt = grp[str(k) + "/" + str(k)].value
+#               print "k=", k, " dt=", dt
+                time  = time + np.array(dt).tolist()
+#               print "k=", k, " timestamp=", np.array(dt).tolist() + t[k]
+                samples = 0
+                for i in range(len(time)):
+                    if np.isnan(time[i]):
+                        continue
+                    samples += 1
+                assert samples == len(time), "NaNs found when reading " + series_name
+#           print "len(time)=", len(time), " len(t)=", len(t)
+#           print "time=", time
+#           print "t=", t
+            ts = behavior_helper(ts, time, t, 1)
+            data = np.zeros(len(t))
+            data += 1
+            ts.set_data(data, "Licks", 1, 1)
+        else:
+            # keyName in ["PoleInTime", "PoleOutTime", "CueTime"]
+            # NL data
+            # fill in values
+            time = np.array(h5lib.get_value_pointer_by_key(hash_group , keyName, \
+                                                        options.debug)).tolist()
+            ts = behavior_helper(ts, time, t, 1)
     else:
-        # NL data
-        # fill in values
-        time = np.array(h5lib.get_value_pointer_by_key(hash_folder, keyName, \
-                                                    options.debug)).tolist()
-        ts = behavior_helper(ts, time, t, 1)
+        sys.exit("Unknown key " + keyName + " in create_time_series") 
     ts.set_description(description)
     ts.set_source(source)
     ts.set_comments("Timestamp array stores " + series_name + " times")
@@ -455,9 +514,9 @@ def create_behavioral_time_series(nwb_object, hash_folder, keyName, series_type,
 
 def behavior_helper(ts, time, start_times, data_value):
     # times relative to session time
-    timestamps = time + start_times
+    timestamps = np.array(time + start_times)
     # delete bad trial points
-    timestamps = timestamps[~np.isnan(time)]
+    timestamps = timestamps[~np.isnan(timestamps)]
     # create dummy data: 1 for 'on', -1 for 'off'
     data = [data_value]*len(timestamps)
     # write data into timeseries
@@ -483,43 +542,43 @@ def process_pole_position(orig_h5, nwb_object, options):
         pole_iface.set_source("Times and intervals are as reported in Simon's data file")
 
         keyName = "poleInReach"
-        hash_folder = orig_h5['eventSeriesArrayHash']
-        grp = h5lib.get_value_pointer_by_key(hash_folder, keyName, \
+        hash_group  = orig_h5['eventSeriesArrayHash']
+        grp = h5lib.get_value_pointer_by_key(hash_group , keyName, \
                                               options.debug)
 # GD: should use trialTimeUnit to figure out the multiplier below
         t = grp["eventTimes/eventTimes"].value * 0.001
         source = "Intervals are as reported in somatosensory cortex data file"
-        description = h5lib.get_description_by_key(hash_folder, keyName)
-        pole_acc = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName, "IntervalSeries", \
+        description = h5lib.get_description_by_key(hash_group , keyName)
+        pole_acc = create_time_series(orig_h5, nwb_object, \
+                   hash_group , keyName, "IntervalSeries", \
                    "pole_accessible", t, '', description, source, options)
         pole_iface.add_timeseries(pole_acc)
         mod.finalize()
     elif "PoleInTime"  in h5lib.get_key_list(orig_h5['trialPropertiesHash']) and \
          "PoleOutTime" in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
-        # NL data
+        # NL or JY data
         mod.set_description("Intervals that pole is accessible")
         pole_iface = mod.create_interface("BehavioralEvents")
         pole_iface.set_source("Times and intervals are as reported in motor cortex data file, but relative to session start")
 
-        hash_folder = orig_h5["trialPropertiesHash"]
+        hash_group  = orig_h5["trialPropertiesHash"]
         source = "Times as reported in motor cortex data file, but relative to session start"
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
 
         # get relevant pole_in data
         keyName1 = "PoleInTime"
-        description = h5lib.get_description_by_key(hash_folder, keyName1)
-        pole_in  = create_behavioral_time_series(nwb_object, \
-                       hash_folder, keyName1, "IntervalSeries", \
+        description = h5lib.get_description_by_key(hash_group , keyName1)
+        pole_in  = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName1, "IntervalSeries", \
                        "pole_in", trial_start_times, '', description, source, \
                        options)
         pole_iface.add_timeseries(pole_in)
 
         # same procedure for pole_out
         keyName2 = "PoleOutTime"
-        description = h5lib.get_description_by_key(hash_folder, keyName2)
-        pole_out = create_behavioral_time_series(nwb_object, \
-                       hash_folder, keyName2, "IntervalSeries", \
+        description = h5lib.get_description_by_key(hash_group , keyName2)
+        pole_out = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName2, "IntervalSeries", \
                        "pole_out", trial_start_times, '', description, source, \
                        options)
         pole_iface.add_timeseries(pole_out)
@@ -535,35 +594,63 @@ def process_pole_position(orig_h5, nwb_object, options):
 # BehavioralEvent (lick_right)
 def process_licks(orig_h5, nwb_object):
     mod = nwb_object.create_module("Licks")
-    mod.set_description("Lickport contacts, right and left")
-    lick_iface = mod.create_interface("BehavioralEvents")
-    lick_iface.set_source("Data as reported in somatosensory cortex data file")
 
-    hash_folder = orig_h5['eventSeriesArrayHash']
-    source = "Intervals are as reported in somatosensory cortex data file"
+    if not 'LickTime' in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
+        # SP data
+        mod.set_description("Lickport contacts, right and left")
+        lick_iface = mod.create_interface("BehavioralEvents")
+        lick_iface.set_source("Data as reported in somatosensory cortex data file")
+        hash_group  = orig_h5['eventSeriesArrayHash']
+        source = "Intervals are as reported in somatosensory cortex data file"
 
-    # Handle left licks
-    keyName1 = 'leftLicks'
-    description = h5lib.get_description_by_key(hash_folder, keyName1)
-    grp = h5lib.get_value_by_key(hash_folder, keyName1)
+        # Handle left licks
+        keyName1 = 'leftLicks'
+        description = h5lib.get_description_by_key(hash_group , keyName1)
+        grp = h5lib.get_value_by_key(hash_group , keyName1)
 # GD
-    t = grp["eventTimes/eventTimes"].value * 0.001
-    ts_left = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName1, "IntervalSeries", \
-                   "lick_left", t, '', description, source, options)
-    lick_iface.add_timeseries(ts_left)
+        t = grp["eventTimes/eventTimes"].value * 0.001
+        ts_left = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName1, "IntervalSeries", \
+                       "lick_left", t, '', description, source, options)
+        lick_iface.add_timeseries(ts_left)
 
-    # Handle right licks      
-    keyName2 = 'rightLicks'             
-    description = h5lib.get_description_by_key(hash_folder, keyName2) 
-    grp = h5lib.get_value_by_key(hash_folder, keyName2)  
+        # Handle right licks      
+        keyName2 = 'rightLicks'             
+        description = h5lib.get_description_by_key(hash_group , keyName2) 
+        grp = h5lib.get_value_by_key(hash_group , keyName2)  
 # GD
-    t = grp["eventTimes/eventTimes"].value * 0.001
-    ts_right = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName2, "IntervalSeries", \
-                   "lick_right", t, '', description, source, options)
-    lick_iface.add_timeseries(ts_right)
+        t = grp["eventTimes/eventTimes"].value * 0.001
+        ts_right = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName2, "IntervalSeries", \
+                       "lick_right", t, '', description, source, options)
+        lick_iface.add_timeseries(ts_right)
+    else:    
+        # JY data
+        mod.set_description("Lick port contact times")
+        lick_iface = mod.create_interface("BehavioralEvents")
+        lick_iface.set_source("Data as reported in Jianing's data file")
+        hash_group  = orig_h5['trialPropertiesHash']
+        source = "Lick times as reported in Jianing's data file"
 
+        # Handle lick times
+        keyName = 'LickTime'
+        description = h5lib.get_description_by_key(hash_group , keyName)
+        trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
+
+        grp = h5lib.get_value_by_key(hash_group , keyName)
+        start_t = []
+        num_trials = len(grp.keys())
+#       print "LickTime sorted(grp.keys())=", sorted([int(k) for k in grp.keys()])
+#       print "num_trials=", num_trials
+        for k in sorted([int(k) for k in grp.keys()]):  
+            dt = grp[str(k) + "/" + str(k)].value * 0.001
+            for i in range(0, len(dt)):
+                start_t.append(trial_start_times[int(k-1)])
+
+        ts_time = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName, "IntervalSeries", \
+                       "lick_time", start_t, '', description, source, options)
+        lick_iface.add_timeseries(ts_time)
     mod.finalize()
 
 # ------------------------------------------------------------------------------
@@ -577,28 +664,28 @@ def process_water(orig_h5, nwb_object):
     water_iface = mod.create_interface("BehavioralTimeSeries")
     water_iface.set_source("Times and intervals are as reported in Simon's data file")
 
-    hash_folder = orig_h5['eventSeriesArrayHash']
+    hash_group  = orig_h5['eventSeriesArrayHash']
     source = "Intervals are as reported in somatosensory cortex data file"
 
     # left water
     keyName1 = "leftReward"
-    description = h5lib.get_description_by_key(hash_folder, keyName1)
-    grp = h5lib.get_value_by_key(hash_folder, keyName1)
+    description = h5lib.get_description_by_key(hash_group , keyName1)
+    grp = h5lib.get_value_by_key(hash_group , keyName1)
 # GD
     t = grp["eventTimes/eventTimes"].value * 0.001
-    water_left = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName1, "IntervalSeries", \
+    water_left = create_time_series(orig_h5, nwb_object, \
+                   hash_group , keyName1, "IntervalSeries", \
                    "water_left", t, '', description, source, options)
     water_iface.add_timeseries(water_left)
 
     # right water 
     keyName2 = "rightReward"
-    description = h5lib.get_description_by_key(hash_folder, keyName2)
-    grp = h5lib.get_value_by_key(hash_folder, keyName2)
+    description = h5lib.get_description_by_key(hash_group , keyName2)
+    grp = h5lib.get_value_by_key(hash_group , keyName2)
 # GD
     t = grp["eventTimes/eventTimes"].value * 0.001
-    water_right = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName2, "IntervalSeries", \
+    water_right = create_time_series(orig_h5, nwb_object, \
+                   hash_group , keyName2, "IntervalSeries", \
                    "water_right", t, '', description, source, options)
     water_iface.add_timeseries(water_right)
 
@@ -619,16 +706,16 @@ def process_cue(orig_h5, nwb_object, options):
         cue_iface = mod.create_interface("BehavioralTimeSeries")
         cue_iface.set_source("Intervals are as reported in Simon's data file")
 
-        hash_folder = orig_h5['eventSeriesArrayHash']
+        hash_group  = orig_h5['eventSeriesArrayHash']
 
         # auditory cue 
         keyName = "rewardCue"
-        description = h5lib.get_description_by_key(hash_folder, keyName)
-        grp = h5lib.get_value_by_key(hash_folder, keyName)
+        description = h5lib.get_description_by_key(hash_group , keyName)
+        grp = h5lib.get_value_by_key(hash_group , keyName)
 # GD
         t = grp["eventTimes/eventTimes"].value[0:4] * 0.001
-        cue = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName, "IntervalSeries", \
+        cue = create_time_series(orig_h5, nwb_object, \
+                   hash_group , keyName, "IntervalSeries", \
                    "auditory_cue", t, '', description, source, options)
         cue_iface.add_timeseries(cue)      
         mod.finalize()
@@ -641,17 +728,15 @@ def process_cue(orig_h5, nwb_object, options):
         cue_iface.set_source(source)
 
         keyName = "CueTime"
-        hash_folder = orig_h5['trialPropertiesHash']
-        description = h5lib.get_description_by_key(hash_folder, keyName)
+        hash_group  = orig_h5['trialPropertiesHash']
+        description = h5lib.get_description_by_key(hash_group , keyName)
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
         # initialize and process auditory cue time series
-        cue = create_behavioral_time_series(nwb_object, \
+        cue = create_time_series(orig_h5, nwb_object, \
               orig_h5["trialPropertiesHash"], "CueTime", "IntervalSeries", \
               "auditory_cue", trial_start_times, '', description, source, options)
         cue_iface.add_timeseries(cue)
         mod.finalize()
-    else:
-        sys.exit("Unable to read cue")
 
 # ------------------------------------------------------------------------------
 
@@ -669,79 +754,116 @@ def process_whisker(orig_h5, nwb_object, options):
 
     # Create time series
     keyName = 'whiskerVars'
-    hash_folder = orig_h5['timeSeriesArrayHash']
-    grp   = h5lib.get_value_by_key(hash_folder, keyName)   
+    hash_group  = orig_h5['timeSeriesArrayHash']
+    grp   = h5lib.get_value_by_key(hash_group , keyName)   
 # GD scaling must be read in from input file
     t     = grp["time/time"].value * 0.001
     val   = grp["valueMatrix/valueMatrix"].value
     
-    # whisker angle time series
-    # embedded nans screw things up -- remove them
-    # count how many non-nan values, and prepare output array
-    angle = val[0]
-    source   = "Whisker angle as reported in somatosensory cortex data file"
-    description = "Angle of whiskers"
-    ts_angle = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName, "IntervalSeries", \
-                   "whisker_angle", t, angle, description, source, options)
-    whisker_iface.add_timeseries(ts_angle)
+    if 'eventSeriesArrayHash' in orig_h5.keys() and \
+       'touches' in h5lib.get_key_list(orig_h5['eventSeriesArrayHash']):
+        # SP data
+  
+        # whisker angle time series
+        # embedded nans screw things up -- remove them
+        # count how many non-nan values, and prepare output array
+        angle = val[0]
+        source   = "Whisker angle as reported in somatosensory cortex data file"
+        description = "Angle of whiskers"
+        ts_angle = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName, "IntervalSeries", \
+                       "whisker_angle", t, angle, description, source, options)
+        whisker_iface.add_timeseries(ts_angle)
 
-    # whisker curvature
-    curv  = val[1]
-    source = "Whisker curvature as reported in somatosensory cortex data file"
-    description = "Curvature (relative) of whiskers"
-    ts_curve = create_behavioral_time_series(nwb_object, \
-                   hash_folder, keyName, "IntervalSeries", \
-                   "whisker_curve", t, curv, description, source, options)
-    whisker_iface.add_timeseries(ts_curve)
+        # whisker curvature
+        curv  = val[1]
+        source = "Whisker curvature as reported in somatosensory cortex data file"
+        description = "Curvature (relative) of whiskers"
+        ts_curve = create_time_series(orig_h5, nwb_object, \
+                       hash_group , keyName, "IntervalSeries", \
+                       "whisker_curve", t, curv, description, source, options)
+        whisker_iface.add_timeseries(ts_curve)
 
-    # pole touches
-    pole_iface = mod.create_interface("BehavioralTimeSeries")
+        # pole touches
+        pole_iface = mod.create_interface("BehavioralTimeSeries")
 
-    keyName = "touches"
-    hash_folder =  orig_h5["eventSeriesArrayHash"]
-    grp = h5lib.get_value_by_key(hash_folder, keyName)
+        keyName = "touches"
+        hash_group  =  orig_h5["eventSeriesArrayHash"]
+        grp = h5lib.get_value_by_key(hash_group , keyName)
 
-    # protraction touches
+        # protraction touches
 # GD
-    t = grp["eventTimes/1/1"].value * 0.001
-    description = "Intervals that whisker touches pole (protract)"
-    source = "Intervals are as reported in somatosensory cortex data file"
-    num_ts = 0
-    if len(t) > 0:
-        pole_touch_pr = create_behavioral_time_series(nwb_object, hash_folder, \
-                            keyName, "IntervalSeries", "pole_touch_protract", \
-                            t, '', description, source, options)
-        pole_iface.add_timeseries(pole_touch_pr)
-        num_ts = num_ts + 1
+        t = grp["eventTimes/1/1"].value * 0.001
+        description = "Intervals that whisker touches pole (protract)"
+        source = "Intervals are as reported in somatosensory cortex data file"
+        num_ts = 0
+        if len(t) > 0 or not option.handle_errors:
+            pole_touch_pr = create_time_series(orig_h5, nwb_object, hash_group , \
+                                keyName, "IntervalSeries", "pole_touch_protract", \
+                                t, '', description, source, options)
+            pole_iface.add_timeseries(pole_touch_pr)
+            num_ts = num_ts + 1
 
         # retraction touches
 # GD
-    t = grp["eventTimes/2/2"].value * 0.001
-    description = "Intervals that whisker touches pole (retract)"
-    if len(t) > 0:
-        pole_touch_re = create_behavioral_time_series(nwb_object, hash_folder, \
-                            keyName, "IntervalSeries", "pole_touch_retract", \
-                            t, '', description, source, options)
-        pole_iface.add_timeseries(pole_touch_re)
-        num_ts = num_ts + 1
+        t = grp["eventTimes/2/2"].value * 0.001
+        description = "Intervals that whisker touches pole (retract)"
+        if len(t) > 0 or not option.handle_errors:
+            pole_touch_re = create_time_series(orig_h5, nwb_object, hash_group , \
+                                keyName, "IntervalSeries", "pole_touch_retract", \
+                                t, '', description, source, options)
+            pole_iface.add_timeseries(pole_touch_re)
+            num_ts = num_ts + 1
+    else:   
+        # JY data
+        keyName = "whiskerVars"
+        hash_group  = orig_h5["timeSeriesArrayHash"]
+        grp = h5lib.get_value_by_key(hash_group , keyName)
+        t = grp["time/time"]
+        source = "Times as reported in Jianing's data file"
+        description = "Time moment that whisker touches pole"
+        num_vars = len(np.array(grp["id/id"]).tolist())
+        num_ts = 0
+        if len(t) > 0:
+            valueMatrix = np.array(grp["valueMatrix/valueMatrix"])
+            idStr         = np.array(grp["idStr/idStr"])
+            try:
+                idStrDetailed = np.array(grp["idStrDetailed/idStrDetailed"])
+            except:
+                idStrDetailed = idStr
+            for i in range(0, num_vars):
+                var         = valueMatrix[i]
+                var_name    = idStr[i]
+#               print "        Creating time series ", str(i+1), "/", str(num_vars), \
+#                              ", name= ", var_name, "..."
+                description = idStrDetailed[i]
+                whisker_var = create_time_series(orig_h5, nwb_object, hash_group , \
+                                keyName, "IntervalSeries", var_name, \
+                                t, var, description, source, options)
+                whisker_iface.add_timeseries(whisker_var)
+                num_ts = num_ts + 1
     if num_ts > 0:
         mod.finalize()
 
 # ------------------------------------------------------------------------------
 
-def process_pole_touches(orig_h5, nwb_object):
+def process_pole_touches(orig_h5, nwb_object, options):
     # add kappaMaxAbsOverTouch to pole_touch_protract
     keyName1 = "touches"
     keyName2 = "kappaMaxAbsOverTouch"
     kappa_ma_pr = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/1", keyName2)
     pole_tp_path = "processing/Whisker/BehavioralTimeSeries/pole_touch_protract"
-    try:
+    if options.handle_errors:
+        try:
+            pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
+            pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
+        except:
+            print "Cannot create dataset processing/Whisker/BehavioralTimeSeries/pole_touch_protract/kappa_max_abs_over_touch"
+    else:
         pole_tp_grp = nwb_object.file_pointer[pole_tp_path]
         pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
-    except:
-        print "Cannot create dataset processing/Whisker/BehavioralTimeSeries/pole_touch_protract/kappa_max_abs_over_touch"
+
     # add kappaMaxAbsOverTouch to pole_touch_retract
     kappa_ma_re = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/2", keyName2)
@@ -770,26 +892,69 @@ def process_stimulus(orig_h5, nwb_object):
 
 # ------------------------------------------------------------------------------
 
+def process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options):
+    keyName = 'Ephys'
+    hash_group  = orig_h5['timeSeriesArrayHash']
+    mod = nwb_object.create_module(keyName)
+    mod_descr = h5lib.get_description_by_key(hash_group, keyName)
+    print "mod_descr=", mod_descr
+    mod.set_description(mod_descr)
+
+    # Create interface
+    ephys_iface = mod.create_interface("FilteredEphys")         
+    ephys_iface.set_source("Intracellular ephys data as reported in Jianing's data file")
+
+    # Create time series
+    grp   = h5lib.get_value_by_key(hash_group , keyName)
+    time = np.transpose(np.array(grp["time/time"]))
+    print "time.shape=", time.shape
+    t = []
+    for i in range(time.shape[0]):
+        t = t + time[i,:].tolist()
+    source = "Times as reported in Jianing's data file"
+    num_ts = 0
+    print "len(t)=", len(t)
+    if len(t) > 0:
+        valueMatrix = np.array(grp["valueMatrix/valueMatrix"])
+        idStr       = np.array(grp["idStr/idStr"])
+        try:
+            idStrDetailed = np.array(grp["idStrDetailed/idStrDetailed"])
+        except:
+            idStrDetailed = idStr
+        num_var = len(idStr)                   
+#       print "num_var=", num_var 
+        for i in range(num_var):
+            var = valueMatrix[i]
+            series_name = idStr[i]
+            ephys_var = create_time_series(orig_h5, nwb_object, hash_group , \
+                        keyName, "ElectricalSeries", series_name, \
+                        np.array(t), var, idStr[i], source, options)
+            electrode_idx = meta_h5["intracellular/recordingCoordinates/recordingCoordinates"]
+            ephys_var.set_value("electrode_idx", electrode_idx)
+            ephys_iface.add_timeseries(ephys_var)
+            num_ts = num_ts + 1
+    if num_ts > 0:
+        mod.finalize()
+
+# ------------------------------------------------------------------------------
+
 # trial start times are stored in: h5::trialStartTimes::trialStartTimes
 # trial stop isn't stored. assume that it's twice the duration of other
 #   trials -- padding on the high side shouldn't matter
-def create_trials(orig_h5, nwb_object):
+def create_trials(orig_h5, nwb_object, options):
     trial_id = orig_h5["trialIds/trialIds"].value
     trial_t  = orig_h5["trialStartTimes/trialStartTimes"].value * 0.001
+    ival     = (trial_t[-1] - trial_t[0]) / (len(trial_t) - 1)
+    trial_t  = np.append(trial_t, trial_t[-1] + 2*ival)
+
     if "GoodTrials" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
-        # NL data
+        # NL data only
         good_trials = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"],  "GoodTrials")
         ignore_ivals_start = [time for (time, good_trial) in zip(trial_t,good_trials) if good_trial == 0]
         # trial stop isn't stored. assume that it's twice the duration of other
         #   trials -- padding on the high side shouldn't matter
-        ival = (trial_t[-1] - trial_t[0]) / (len(trial_t) - 1)
-        trial_t = np.append(trial_t, trial_t[-1] + 2*ival)
         ignore_ivals_stop = [time for (time, good_trial) in zip(trial_t[1:],good_trials) if good_trial == 0]
-        ignore_intervals = [ignore_ivals_start, ignore_ivals_stop]
-    else:
-        # SP data
-        ival = (trial_t[-1] - trial_t[0]) / (len(trial_t) - 1)
-        trial_t = np.append(trial_t, trial_t[-1] + 2*ival)
+        ignore_intervals  = [ignore_ivals_start, ignore_ivals_stop]
 
     for i in range(len(trial_id)):
         tid = trial_id[i]
@@ -820,33 +985,46 @@ def create_trials(orig_h5, nwb_object):
 #               print "ts=", ts
                 epoch.add_timeseries(key, ts_path)
             epoch.finalize()
-#           print "nwb_object.file_pointer['epochs'].keys()=", nwb_object.file_pointer["epochs"].keys()
-
-#           print "trial=", trial
-#           print "nwb_object.file_pointer['epochs'].keys()=", nwb_object.file_pointer["epochs"].keys()
-#           print "ignore_intervals=", ignore_intervals
-#           print "dir(nwb_object.file_pointer['epochs'])=", dir(nwb_object.file_pointer['epochs'])
 # GD        nwb_object.file_pointer["epochs"][trial].create_dataset("ignore_intervals", data=ignore_intervals, dtype='f8')
-        else:
-            # SP data
+        elif "TrialName" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
+            # JY data
+#           print "    ...trial=", trial
             epoch.description = ("Data that belong to " + trial)
-            events    = {"lick_right" :  "Licks",   "lick_left"     :  "Licks", \
-                      "whisker_angle" :  "Whisker", "whisker_curve" :  "Whisker"}
+            events    = {"lick_time" :  "Licks"}
+            for key in events.keys():
+                ts_path = "/processing/" + events[key] + "/BehavioralEvents/" + key
+#               try:
+                epoch.add_timeseries(key, ts_path)
+#               except:
+#                   print "Cannot add event time series " + ts_path
+            epoch.finalize()
+        else:
+            # SP and JY data
+            epoch.description = ("Data that belong to " + trial)
+            events    = {   "lick_right" :  "Licks",   "lick_left"     :  "Licks", \
+                         "whisker_angle" :  "Whisker", "whisker_curve" :  "Whisker"}
             intervals = {"water_left" :  "Water",   "water_right"   :  "Water", \
                          "pole_accessible"     :  "Pole",    "auditory_cue"       :  "Auditory", \
                          "pole_touch_protract" :  "Whisker", "pole_touch_retract" :  "Whisker"}
             for key in events:
                 ts_path = "/processing/" + events[key] + "/BehavioralEvents/" + key
-                try:
+                if options.handle_errors:
+                    try:
+                        epoch.add_timeseries(key, ts_path)
+                    except:
+                        print "Cannot add event time series " + ts_path
+                else:
                     epoch.add_timeseries(key, ts_path)
-                except:
-                    print "Cannot add event time series " + ts_path
+
             for key in intervals:
                 ts_path = "/processing/" + intervals[key] + "/BehavioralTimeSeries/" + key
-                try:
+                if options.handle_errors:
+                    try:
+                        epoch.add_timeseries(key, ts_path)
+                    except:
+                        print "Cannot add time series " + ts_path
+                else:
                     epoch.add_timeseries(key, ts_path)
-                except:
-                    print "Cannot add time series " + ts_path
             epoch.finalize()
 
 # ------------------------------------------------------------------------------
@@ -855,7 +1033,7 @@ def create_trials(orig_h5, nwb_object):
 # to parse, take each subarea, pull out trials
 #   foeach trial, write ROI
 #   to get plane, find ROI in imaging plane
-def create_trial_roi_map(orig_h5, nwb_object, plane_map):
+def create_trial_roi_map(orig_h5, nwb_object, plane_map, options):
     fp = nwb_object.file_pointer
     num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
     for i in range(num_subareas):
@@ -888,8 +1066,8 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map):
             for trial_name in trial_list.keys():
                 roi_list = []
                 plane_list = []
-                valid_whisker = get_valid_trials(orig_h5, "whisker")
-                valid_Ca = get_valid_trials(orig_h5, "Ca")
+                valid_whisker = get_valid_trials(orig_h5, "whisker", options)
+                valid_Ca = get_valid_trials(orig_h5, "Ca", options)
                 for k in range(len(ids)):
                     roi = "%d" % ids[k]
                     plane = int(planemap[roi])
@@ -901,11 +1079,16 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map):
                     s = "processing/ROIs/DfOverF/%s/%s" % (imaging_plane, roi)
                     roi_list.append(ids[k])
                     plane_list.append(imaging_plane)
-                try:
+                if options.handle_errors:
+                    try:
+                        grp = nwb_object.file_pointer["epochs/" + trial_name]
+                        grp.attrs["valid_whisker_data"]
+                    except:
+                        grp = nwb_object.file_pointer.create_group("epochs/" + trial_name)
+                else:
                     grp = nwb_object.file_pointer["epochs/" + trial_name]
                     grp.attrs["valid_whisker_data"]
-                except:
-                    grp = nwb_object.file_pointer.create_group("epochs/" + trial_name)
+
                 grp.create_dataset("ROIs", data=roi_list)
                 grp.create_dataset("ROI_planes", data=plane_list)
         else:
@@ -914,20 +1097,22 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map):
 # ------------------------------------------------------------------------------
 
 # add trial types to epoch for indexing
-def get_trial_types(orig_h5, nwb_object):
+def get_trial_types(orig_h5, nwb_object, options):
     fp = nwb_object.file_pointer
     trial_id = orig_h5["trialIds/trialIds"].value
     trial_types_all = []
     trial_type_strings = parse_h5_obj(orig_h5['trialTypeStr'])[0]
+    num_trial_types    = len(trial_type_strings)
     if "PhotostimulationType" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
         # NL data
         photostim_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], "PhotostimulationType")
-        num_trial_types = 8
-    else:
+    elif "StimulusPosition" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
         # SP data
-        valid_whisker = get_valid_trials(orig_h5, "whisker")
-        valid_Ca      = get_valid_trials(orig_h5, "Ca")
-        num_trial_types = 6
+        valid_whisker = get_valid_trials(orig_h5, "whisker", options)
+        valid_Ca      = get_valid_trials(orig_h5, "Ca", options)
+    else:
+        # JY data
+        trial_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], 'TrialName')
 
     # collect all trials (strings)
     for i in range(num_trial_types):
@@ -941,7 +1126,10 @@ def get_trial_types(orig_h5, nwb_object):
         for j in range(num_trial_types):
             if trial_type_mat[j,i] == 1:
                 trial_types.append(trial_types_all[j])
-        grp = nwb_object.file_pointer["epochs/" + trial_name]
+        try:
+            grp = nwb_object.file_pointer["epochs/" + trial_name]
+        except:
+            grp = nwb_object.file_pointer.create_group("epochs/" + trial_name)
         grp.create_dataset("trial_types", data=trial_types)
         if "PhotostimulationType" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
             # NL data
@@ -955,7 +1143,7 @@ def get_trial_types(orig_h5, nwb_object):
             else:
                 photostim_type = "discard"
             grp.create_dataset("photostimulation_type", data=photostim_type)
-        else:
+        elif "StimulusPosition" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
             # SP data
             if i in valid_whisker:
                 grp.attrs["valid_whisker_data"] = "True"
@@ -965,20 +1153,30 @@ def get_trial_types(orig_h5, nwb_object):
                  grp.attrs["valid_Ca_data"] = "True"
             else:
                 grp.attrs["valid_Ca_data"] = "False"
+        else:
+            # JY data
+            grp.create_dataset("trial_name", data=trial_types)
         
 # ------------------------------------------------------------------------------
         
-def get_valid_trials(orig_h5, data):
+def get_valid_trials(orig_h5, data, options):
     ts_path = "timeSeriesArrayHash/descrHash/"
     val = []
-    num_subareas = 1
-    if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+    if options.handle_errors:
+        num_subareas = 1
+        if '1' in orig_h5['timeSeriesArrayHash/descrHash'].keys():
+            num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+    else:
         num_subareas = len(orig_h5['timeSeriesArrayHash/descrHash'].keys()) - 1
+
     if data == "whisker":
-        try:                      
+        if options.handle_errors:
+            try:                      
+                ids = parse_h5_obj(orig_h5[ts_path + '1/value'])[0]
+            except:
+                ids = parse_h5_obj(orig_h5[ts_path + 'value'])[0]
+        else:
             ids = parse_h5_obj(orig_h5[ts_path + '1/value'])[0]
-        except:
-            ids = parse_h5_obj(orig_h5[ts_path + 'value'])[0]
         val = val + list(ids)
         val = list(Set(val))
     if data == "Ca":
@@ -1016,7 +1214,7 @@ def process_metadata(nwb_object, input_h5, options):
 #   print "metadata key_list=", key_list
     for key in key_list:
         try:
-            if key in ["behavior", "virus", "fiber", "photostim", "extracellular"]:
+            if key in ["behavior", "virus", "fiber", "photostim", "extracellular", "intracellular"]:
                 # Note: these are two-level groups
                 value = ""
                 key1_list = h5lib.get_value_pointer_by_path_items(group_pointer, [key]).keys()
@@ -1080,7 +1278,7 @@ def process_metadata(nwb_object, input_h5, options):
         elif re.search("experimenters", key):
             nwb_object.set_metadata("experimenter", value)
 
-        elif key in ["sex", "species", "age"]:
+        elif key in ["sex", "species", "age", "cell"]:
             nwb_object.set_metadata(key, value)
 
         elif re.search("referenceAtlas", key):
@@ -1090,7 +1288,7 @@ def process_metadata(nwb_object, input_h5, options):
             nwb_object.set_metadata("whisker_configuration", value)
 
         elif key in ["behavior", "virus", "fiber", "photostim", "extracellular", \
-                     "surgicalManipulation"]:
+                     "surgicalManipulation", "intracellular"]:
             nwb_object.set_metadata(key, value)
 
     nwb_object.set_metadata("genotype", animalGeneModification + "\n" + genotype + "\n")
@@ -1107,20 +1305,31 @@ def process_metadata(nwb_object, input_h5, options):
 # ------------------------------------------------------------------------------
 
 def process_behavioral_data(orig_h5, nwb_object, options):
-    if options.verbose:
-        print "Processing behavioral time series data"
 
-    # Both NL and SP data:
+    # NL, SP and JY data:
+    print "    Processing pole position ..."
     process_pole_position(orig_h5, nwb_object, options)
-    process_cue(orig_h5, nwb_object, options)
+    if ("eventSeriesArrayHash" in h5lib.get_child_group_names(orig_h5) and \
+                   "rewardCue" in h5lib.get_key_list(orig_h5['eventSeriesArrayHash'])) or \
+                     "CueTime" in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
+        print "    Processing cue ..."
+        process_cue(orig_h5, nwb_object, options)
 
-    # Only SP data:
     if "whiskerVars" in h5lib.get_key_list(orig_h5['timeSeriesArrayHash']):
+        # SP and JY data:
+        print "    Processing whisker data ..."
         process_whisker(orig_h5, nwb_object, options)
+        print "    Processing licks data ..."
         process_licks(orig_h5, nwb_object)
-        process_water(orig_h5, nwb_object)
-        process_pole_touches(orig_h5, nwb_object)
-        process_stimulus(orig_h5, nwb_object)
+        
+        if not 'LickTime' in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
+            # SP data only
+            print "    Processing water data ..."
+            process_water(orig_h5, nwb_object)
+            print "    Processing touches data ..."
+            process_pole_touches(orig_h5, nwb_object, options)
+            print "    Processing stimulus data ..."
+            process_stimulus(orig_h5, nwb_object)
 
 # ------------------------------------------------------------------------------
 
@@ -1173,8 +1382,10 @@ def create_epochs(orig_h5, nwb_object, options):
     if options.verbose:
         print "Creating epochs"
 
-    create_trials(orig_h5,   nwb_object)
-    get_trial_types(orig_h5, nwb_object)
+    print "    Creating trials ..."
+    create_trials(orig_h5, nwb_object, options)
+    print "    Getting trial types ..."
+    get_trial_types(orig_h5, nwb_object, options)
 
     if "GoodTrials" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
         # NL data  only
@@ -1184,7 +1395,7 @@ def create_epochs(orig_h5, nwb_object, options):
 
 # ------------------------------------------------------------------------------
 
-def process_image_data(orig_h5, nwb_object, plane_map):
+def process_image_data(orig_h5, nwb_object, plane_map, options):
     # store master images
     print "Creating reference images"
     num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
@@ -1209,7 +1420,7 @@ def process_image_data(orig_h5, nwb_object, plane_map):
         for plane in range(num_planes):
             master_shape = create_reference_image(orig_h5, nwb_object, \
                                master_shape, plane_map,subarea+1, \
-                               plane+1, num_planes) 
+                               plane+1, options, num_planes) 
             sys.stdout.write('.')
             sys.stdout.flush()
     print ""
@@ -1242,9 +1453,9 @@ def process_image_data(orig_h5, nwb_object, plane_map):
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
             fetch_rois(orig_h5, master_shape, plane_map, seg_iface, subarea+1, \
-                       plane+1, num_planes)
+                       plane+1, options, num_planes)
             fetch_dff( orig_h5, nwb_object,   plane_map, dff_iface, subarea+1, \
-                       plane+1, num_planes)
+                       plane+1, options, num_planes)
 
             sys.stdout.write('.')
             sys.stdout.flush()
@@ -1261,7 +1472,7 @@ def process_image_data(orig_h5, nwb_object, plane_map):
         seg_iface.add_reference_image(plane, "%s_green_channel"%plane, img)
 
     print "Creating map between trials and ROIs"
-    create_trial_roi_map(orig_h5, nwb_object, plane_map)
+    create_trial_roi_map(orig_h5, nwb_object, plane_map, options)
 
 
     # generate time series for /acquisition
@@ -1298,15 +1509,15 @@ def process_image_data(orig_h5, nwb_object, plane_map):
         else:
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
-            # if num_planes == 1:
-            #                 pgrp = grp
-            #             else:
-            #                 pgrp = grp["%d"%(plane+1)]
-            try:
+            if options.handle_errors:
+                try:
+                    pgrp = grp["%d"%(plane+1)]
+                except:
+                    # Warning: only one imaging plane is available (instead of 3)
+                    pgrp = grp
+            else:
                 pgrp = grp["%d"%(plane+1)]
-            except:
-                # Warning: only one imaging plane is available (instead of 3)
-                pgrp = grp
+
             frame_idx = pgrp["sourceFileFrameIdx"]["sourceFileFrameIdx"].value
             lst = parse_h5_obj(pgrp["sourceFileList"])[0]
             cnt = 0
@@ -1351,14 +1562,26 @@ def process_image_data(orig_h5, nwb_object, plane_map):
                 if lastfile != filenum:
                     if i>0:
                         if not np.isnan(frame_idx[0][i-1] ) and not np.isnan(frame_idx[1][i-1]):
-                            create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
+                            if options.handle_errors:
+                                try:
+                                    create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
+                                except:
+                                    print "Warning: unable to create_2p_ts for name=", name
+                            else:
+                                create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)
                             stack_t = []
                             fname = None
                 lastframe = framenum
                 lastfile = filenum
             # make sure we write out the last entry
             if fname is not None:
-                create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
+                if options.handle_errors:
+                    try:
+                        create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)             
+                    except:
+                        print "Warning: unable to create_2p_ts for name=", name
+                else:
+                    create_2p_ts(nwb_object, name, fname, stack_t, plane, nname)
             sys.stdout.write('.')
             sys.stdout.flush()
 
@@ -1606,7 +1829,6 @@ def process_extracellular_spike_time(orig_h5, nwb_object, options):
         spk.set_time(timestamps)
         spk.set_data(waveforms, "Volts", 0.1,1)
         spk.set_value("electrode_idx", [channel[0]])
-#       print "\n\nelectrode_idx=", [channel[0]]
         spk.set_description("single unit %d with cell-type information and approximate depth, waveforms sampled at 19531.25Hz" %i)
         spk_waves_iface.add_timeseries(spk)
         # add spk to interface
@@ -1617,6 +1839,28 @@ def process_extracellular_spike_time(orig_h5, nwb_object, options):
     grp = nwb_object.file_pointer["processing/Units"]
     grp.create_dataset("CellTypes", data=cell_types)
     grp.create_dataset("ElectrodeDepths", data=electrode_depths)
+
+# ------------------------------------------------------------------------------
+
+# Extract all keys from input data and check if there are keys not in the pre-defined list
+def check_keys(orig_h5, meta_h5, options):              
+    known_keys=[ 'poleInReach', 'touches', 'leftLicks', 'rightLicks', 'leftReward', 'rightReward', 'rewardCue', 'species', 'animalStrain1', 'animalSource1', 'animalGeneModification1', 'animalStrain2', 'animalSource2', 'animalGeneModification2', 'sex', 'dateOfExperiment', 'timeOfExperiment', 'experimenters', 'whiskerVars', 'dffTSA', 'LWaterValveTime', 'RWaterValveTime', 'StimulusPosition', 'EphusVars' ,  'PoleInTime', 'PoleOutTime', 'CueTime', 'GoodTrials', 'PhotostimulationType', 'animalGeneCopy', 'animalGeneModification', 'animalGeneticBackground', 'animalID', 'animalSource', 'animalStrain', 'behavior', 'citation', 'dateOfBirth', 'experimentType', 'extracellular', 'photostim', 'referenceAtlas', 'surgicalManipulation', 'unit', 'virus', 'weight', 'weightBefore', 'whisker', 'fiber', 'Ephys', 'cell', 'PolePos', 'LickTime', 'TrialName', 'PassiveTouch', 'intracellular']
+    Jaining_keys = ['weightAfter', 'whiskerConfig']
+    known_keys = known_keys + Jaining_keys
+    if options.verbose:
+        print "known_keys=", sorted(known_keys)
+    unknown_keys = []
+    all_keys = h5lib.get_all_keys(orig_h5, meta_h5)
+    if options.verbose:
+        print "\nAll keys=", sorted(all_keys)
+    for k in all_keys:
+        if not k in known_keys and \
+           not re.search("unit", k) and \
+           not re.search("dffTSA", k):
+            unknown_keys.append(k)
+    if len(unknown_keys) > 0:
+        sys.exit("\nUnknown keys found: " + str(unknown_keys))
+    return 
 
 # ------------------------------------------------------------------------------
 
@@ -1652,6 +1896,8 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     if len(metadata_path) > 0:
         meta_h5 = h5py.File(metadata_path, "r")
 
+    check_keys(orig_h5, meta_h5, options)              
+
     print "Input:", data_path, " ", metadata_path
     print "Output:", output_nwb, "\n"
     if options.replace and os.path.exists(output_nwb):
@@ -1663,9 +1909,13 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     #   identifier used between files
 
     vargs = {}
-    if len(metadata_path) > 0:                        
-        # NL data
-        vargs["start_time"] = find_exp_time(meta_h5)
+    if len(metadata_path) > 0: 
+        if "date" in h5lib.get_child_group_names(orig_h5):
+            # JY data                        
+            vargs["start_time"] = find_exp_time(orig_h5)
+        else:
+            # NL data
+            vargs["start_time"] = find_exp_time(meta_h5)
     else:                                             
         # SP data
         vargs["start_time"] = find_exp_time(orig_h5)
@@ -1678,6 +1928,7 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     nwb_object = nwb.NWB(**vargs)
 
     # Process metadat
+    print "Processing metadata ..."
     if "metaDataHash" in h5lib.get_child_group_names(orig_h5):
         # SP data
         process_metadata(nwb_object, orig_h5, options)
@@ -1688,25 +1939,34 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
         sys.exit("\nCannot process metadata. Check your input.")
 
     # Process behavioral time series
+    print "Processing behavioral data ..."
     process_behavioral_data(orig_h5, nwb_object, options)
 
     # Create epochs
+    print "Creating epochs ..."
     create_epochs(orig_h5, nwb_object, options)
 
     if len(metadata_path) == 0:
         # SP data
         plane_map = {}
-        create_plane_map(orig_h5, plane_map)
+        create_plane_map(orig_h5, plane_map, options)
         print "After create_plane_map: plane_map=", plane_map
         if len(plane_map.keys()) > 0:
-            process_image_data(orig_h5, nwb_object, plane_map)
+            process_image_data(orig_h5, nwb_object, plane_map, options)
     else:
-        # NL data
-        process_ephys_electrode_map(nwb_object, meta_h5, options)
-        process_raw_data(orig_h5, nwb_object, options)
-        process_extracellular_spike_time(orig_h5, nwb_object, options)
-        collect_analysis_information(orig_h5, nwb_object, options)
-            
+        # NL or JY data
+        if "extracellular" in meta_h5.keys():
+            # NL data only
+            print "Processing extracellular ephys data ..."
+            process_ephys_electrode_map(nwb_object, meta_h5, options)
+            process_raw_data(orig_h5, nwb_object, options)
+            process_extracellular_spike_time(orig_h5, nwb_object, options)
+            collect_analysis_information(orig_h5, nwb_object, options)
+        if "intracellular" in meta_h5.keys():
+            # JY data only
+            print "Processing intracellular ephys data ..."
+            process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options)
+
     if options.verbose:
         print "Closing file"
 
