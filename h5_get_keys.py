@@ -35,6 +35,10 @@ if __name__ == "__main__":
         elif re.search("meta", h5_file):
             key_list = orig_h5.keys()
             print h5_file, ": keys=", np.array(key_list).tolist()
+            for k in key_list:
+                key_list2 = orig_h5[k].keys()
+                if len(key_list2) > 1:
+                    print h5_file, ", ", k, ": keys2=", np.array(key_list2).tolist()
         else:
             for group in top_groups:
                 if not re.search("Hash", group):
@@ -44,5 +48,6 @@ if __name__ == "__main__":
                     print h5_file, ",", group, ": keys=[]"
                     continue
                 path_items = [group, "keyNames", "keyNames"]
+                print "path_items=", path_items
                 key_list = h5lib.get_value_pointer_by_path_items(orig_h5, path_items)
                 print h5_file, ",", group, ": keys=", np.array(key_list).tolist()
