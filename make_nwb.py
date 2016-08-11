@@ -405,13 +405,13 @@ def create_time_series(series_name, series_type, series_path, \
                        orig_h5, nwb_group, group_attrs, var, t, data_attrs, \
                        hash_group_pointer, keyName, options):
     # initialize timeseries
-    print "    Creating group ", series_name, " type=", series_type, " path=", series_path
+    if options.verbose:
+        print "    Creating group ", series_name, " type=", series_type, " path=", series_path
     if len(series_path) > 0:
         ts = nwb_group.make_group(series_type, series_name, path = series_path, \
                                   attrs = group_attrs)
     else:
         ts = nwb_group.make_group(series_type, series_name, attrs = group_attrs)
-    print "...Done\n"
 #   if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
 #                  "leftLicks", "rightLicks", "whiskerVars", "touches"]:
 
@@ -471,12 +471,16 @@ def create_time_series(series_name, series_type, series_path, \
 
         data = var
         timestamps = t
+        
+        if series_name == "simple_optogentic_stimuli":
+            ts.set_dataset("site", "site 1")
 
     else:
        sys.exit("Unknown key "     + keyName     + \
                 " or series_name " + series_name + \
                 " in create_time_series")
 
+    data_attrs['keyName'] = keyName
     ts.set_dataset("data", data, attrs=data_attrs)
     ts.set_dataset("timestamps", timestamps)
     ts.set_dataset("num_samples", len(timestamps))
@@ -530,11 +534,10 @@ def process_pole_position(orig_h5, nwb_object, options):
         time = grp["1/1"].value
         t = time + trial_start_times
         description = h5lib.get_description_by_key(hash_group_pointer, keyName1)
-        data_attrs = {"resolution":0.1,"conversion":1.0,\
-                      "description" : description, \
-                      "source": source}
+        group_attrs = {"source": source, "description" : description}
+        data_attrs  = {"resolution":0.1,"conversion":1.0} 
         pole_in  = create_time_series("pole_in", "<IntervalSeries>", series_path,\
-                       orig_h5, nwb_object, {}, '', t, data_attrs, \
+                       orig_h5, nwb_object, group_attrs, '', t, data_attrs, \
                        hash_group_pointer, keyName1, options)
 
         # same procedure for pole_out
@@ -542,11 +545,10 @@ def process_pole_position(orig_h5, nwb_object, options):
         time = grp["2/2"].value
         t = time + trial_start_times
         description = h5lib.get_description_by_key(hash_group_pointer, keyName2)
-        data_attrs = attrs={"resolution":float('nan'),"unit":"unknown","conversion":1.0, \
-                            "description" : description, \
-                            "source": source}
+        group_attrs = {"source": source, "description" : description}
+        data_attrs  = {"resolution":float('nan'),"unit":"unknown","conversion":1.0}    
         pole_out = create_time_series("pole_out", "<IntervalSeries>", series_path,\
-                       orig_h5, nwb_object, {}, '', t, data_attrs, \
+                       orig_h5, nwb_object, group_attrs, '', t, data_attrs, \
                        hash_group_pointer, keyName2, options)
     else:
         sys.exit("Unable to read pole position")
@@ -611,10 +613,11 @@ def process_licks(orig_h5, nwb_object):
         comment2 = h5lib.get_description_by_key(hash_group_pointer, keyName)     
         comments = comment1 + ": " + comment2
         print "comment1=", comment1, " comment2=", comment2, " comments=", comments
-        data_attrs={"conversion":1.0, "unit":"unknown", "resolution":float('nan'),\
-                    "description" : description, "comments" : comments}
+        data_attrs={"conversion":1.0, "unit":"unknown", "resolution":float('nan')}  
+        group_attrs={"description" : description, "comments" : comments, \
+                    "source": "Times as reported in Nuo's data file"}
         lick_ts = create_time_series("lick_trace", "<TimeSeries>", series_path,\
-                      orig_h5, nwb_object, {}, lick_trace, timestamps, data_attrs, \
+                      orig_h5, nwb_object, group_attrs, lick_trace, timestamps, data_attrs, \
                       hash_group_pointer, keyName, options)
     else:    
         # JY data
@@ -693,9 +696,7 @@ def process_cue(orig_h5, nwb_object, options):
         t = grp["eventTimes/eventTimes"].value * 0.001
         group_attrs = {"description" : "Intervals when auditory cue presented",\
                        "source": "Intervals are as reported in Simon's data file"}
-        data_attrs = {"unit": "None", "conversion": 1.0, "resolution": 0.0,\
-                      "description" : description, \
-                      "source": "Intervals are as reported in Simon's data file"}  
+        data_attrs = {"unit": "None", "conversion": 1.0, "resolution": 0.0}
         cue_ts = create_time_series("auditory_cue", "<IntervalSeries>", series_path,
                      orig_h5, nwb_object, group_attrs, '', t, data_attrs, \
                      hash_group_pointer, keyName, options)
@@ -913,6 +914,8 @@ def process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options):
 #   trials -- padding on the high side shouldn't matter
 def create_trials(orig_h5, nwb_object, options):
     trial_id = orig_h5["trialIds/trialIds"].value
+    if options.verbose:
+        print "\nCreating trials with ids: ", trial_id
     trial_t  = orig_h5["trialStartTimes/trialStartTimes"].value * 0.001
     # trial stop isn't stored. assume that it's twice the duration of other
     #   trials -- padding on the high side shouldn't matter
@@ -976,9 +979,9 @@ def create_trials(orig_h5, nwb_object, options):
                       "simple_optogentic_stimuli" \
                                         : "/stimulus/presentation/simple_optogentic_stimuli"}
             for key in events.keys():
-                print "Creating epoch ts ", key, " ... "
+                if options.verbose:
+                    print "Creating epoch ts ", key, " ... "
                 ut.add_epoch_ts(epoch, start, stop, key, events[key])
-                print " ... Done"
             
         elif "TrialName" in h5lib.get_key_list(orig_h5["trialPropertiesHash"]):
             # JY data
@@ -987,8 +990,27 @@ def create_trials(orig_h5, nwb_object, options):
                         {"description" : "Data that belong to " + trial})
             ts = "/processing/Licks/BehavioralEvents/lick_time"              
             ut.add_epoch_ts(epoch, start, stop, "lick_time", ts)
+            # loop through whiskerVars
+            keyName = 'whiskerVars'
+            hash_group_pointer  = orig_h5['timeSeriesArrayHash']
+            grp   = h5lib.get_value_by_key(hash_group_pointer , keyName)
+
+            valueMatrix = np.array(grp["valueMatrix/valueMatrix"])
+            idStr         = np.array(grp["idStr/idStr"])
+            try:
+                idStrDetailed = np.array(grp["idStrDetailed/idStrDetailed"])
+            except:
+                idStrDetailed = idStr
+            num_vars = len(np.array(grp["id/id"]).tolist())
+            for i in range(0, num_vars):
+                var         = valueMatrix[i]
+                series_name = str(idStr[i])
+                ts = "/processing/Whisker/BehavioralTimeSeries/" + series_name
+#               print "    ... Adding epoch ts for series_name=", series_name
+                ut.add_epoch_ts(epoch, start, stop, series_name, ts)
+
         else:
-            # SP and JY data
+            # SP data
             epoch = nwb_object.make_group("<epoch_X>", trial)
             epoch.set_dataset("start_time", start)
             epoch.set_dataset("stop_time", stop)
@@ -1061,39 +1083,44 @@ def create_trial_roi_map(orig_h5, nwb_object, plane_map, options):
         else:
             num_planes = len(orig_h5[plane_path].keys())
         if num_planes > 1:
-            for j in range(num_planes):
-                plane = j + 1
+            print "  Warning: in create_trial_roi_map num_planes == 1"
+
+        for j in range(num_planes):
+            plane = j + 1
+            try:
                 grp_name = "imagingPlane/%d/ids/ids" % plane
                 plane_id = block[grp_name].value
-                for k in range(len(plane_id)):
-                    planemap["%d"%plane_id[k]] = "%d" % plane
-            trial_list = {}
-            for j in range(len(trials)):
-                tid = trials[j]
-                name = "Trial_%d%d%d" % (int(tid/100), int(tid/10)%10, tid%10)
-                #name = "Trial_%d" % trials[j]
-                if name not in trial_list:
-                    trial_list[name] = j
-            for trial_name in trial_list.keys():
-                roi_list = []
-                plane_list = []
-                valid_whisker = get_valid_trials(orig_h5, "whisker", options)
-                valid_Ca = get_valid_trials(orig_h5, "Ca", options)
-                for k in range(len(ids)):
-                    roi = "%d" % ids[k]
-                    plane = int(planemap[roi])
-                    # convert from file-specific area/plane mapping to
-                    #   inter-session naming convention
-                    #imaging_plane = "area%d_plane%d" % (area, plane)
-                    oname = "area%d_plane%d" % (area, plane)
-                    imaging_plane = plane_map[oname]
-                    s = "processing/ROIs/DfOverF/%s/%s" % (imaging_plane, roi)
-                    roi_list.append(ids[k])
-                    plane_list.append(imaging_plane)
-                epoch_roi_list[trial_name] = roi_list
-                epoch_roi_planes[trial_name] = plane_list
-        else:
-            print "  Warning: in create_trial_roi_map num_planes == 1"
+            except:
+                print "Warning: only one imaging plane detected for area ", area
+                grp_name = "imagingPlane/ids/ids"
+                plane_id = block[grp_name].value
+            for k in range(len(plane_id)):
+                planemap["%d"%plane_id[k]] = "%d" % plane
+        trial_list = {}
+        for j in range(len(trials)):
+            tid = trials[j]
+            name = "Trial_%d%d%d" % (int(tid/100), int(tid/10)%10, tid%10)
+            #name = "Trial_%d" % trials[j]
+            if name not in trial_list:
+                trial_list[name] = j
+        for trial_name in trial_list.keys():
+            roi_list = []
+            plane_list = []
+            valid_whisker = get_valid_trials(orig_h5, "whisker", options)
+            valid_Ca = get_valid_trials(orig_h5, "Ca", options)
+            for k in range(len(ids)):
+                roi = "%d" % ids[k]
+                plane = int(planemap[roi])
+                # convert from file-specific area/plane mapping to
+                #   inter-session naming convention
+                #imaging_plane = "area%d_plane%d" % (area, plane)
+                oname = "area%d_plane%d" % (area, plane)
+                imaging_plane = plane_map[oname]
+                s = "processing/ROIs/DfOverF/%s/%s" % (imaging_plane, roi)
+                roi_list.append(ids[k])
+                plane_list.append(imaging_plane)
+            epoch_roi_list[trial_name] = roi_list
+            epoch_roi_planes[trial_name] = plane_list
 
 # ------------------------------------------------------------------------------
 
@@ -1323,15 +1350,19 @@ def process_metadata(nwb_object, input_h5, options):
 def process_behavioral_data(orig_h5, nwb_object, options):
 
     # NL, SP and JY data:
-    print "    Processing pole position ..."
+    if options.verbose:
+        print "    Processing pole position ..."
     process_pole_position(orig_h5, nwb_object, options)
-    print "    Processing licks data ..."
+
+    if options.verbose:
+        print "    Processing licks data ..."
     process_licks(orig_h5, nwb_object)
 
     if ("eventSeriesArrayHash" in h5lib.get_child_group_names(orig_h5) and \
                    "rewardCue" in h5lib.get_key_list(orig_h5['eventSeriesArrayHash'])) or \
                      "CueTime" in h5lib.get_key_list(orig_h5['trialPropertiesHash']):
-        print "    Processing cue ..."
+        if options.verbose:
+            print "    Processing cue ..."
         process_cue(orig_h5, nwb_object, options)
 
     if "whiskerVars" in h5lib.get_key_list(orig_h5['timeSeriesArrayHash']):
@@ -1472,6 +1503,10 @@ def add_reference_images_to_image_segmentation(seg_iface, plane_map, \
 
 def process_image_data(orig_h5, nwb_object, plane_map, options):
     # store master images
+    num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
+    master_shape = create_master_shape(plane_map, num_subareas, orig_h5, \
+                                       nwb_object, options)
+
     print "Creating reference images"
     num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
     for subarea in range(num_subareas):
@@ -1486,10 +1521,14 @@ def process_image_data(orig_h5, nwb_object, plane_map, options):
 #     the role of the 1st set of loops is just to wrire symbol '_' ti screen ?!!
     print ""
 
-    master_shape = create_master_shape(plane_map, num_subareas, orig_h5, \
-                                       nwb_object, options)
-
-    print ""
+ # create empty time series for whisker video
+    whisker_vid = nwb_object.make_group("<ImageSeries>", "whisker_video", path="/acquisition/timeseries")
+    whisker_vid.set_dataset("format", "unknown");
+    whisker_vid.set_dataset("external_file", ["whisker_data.tar.gz"], attrs={"starting_frame": [0]})
+    whisker_vid.set_dataset("dimension", [1024, 1024])
+    whisker_vid.set_attr("description", "Place-holder for whisker tracking video. Video information and timestamps not available")
+    whisker_vid.set_dataset("timestamps", "extlink:external_timestamps_link,/path/to/timestamps")
+    whisker_vid.set_dataset("num_samples", 0)
 
     mod = nwb_object.make_group("<Module>", "ROIs")
     mod.set_custom_dataset("description", "Segmentation (pixel-lists) and dF/F (dffTSA) for all ROIs")
@@ -1680,28 +1719,32 @@ def get_description(meta_h5, options):
                                 ["extracellular"])
     value = ""
     for key in extra_grp.keys():
-        if key in ["siteLocations"]:
-            continue
-        key1_list = h5lib.get_value_pointer_by_path_items(extra_grp, [key]).keys()
-        for key1 in key1_list:
-#           print "      key=", key, " key1=", key1
-            value1 = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
-            value2 = [str(v) for v in value1]
-            value += "       " + key1 + ": " + ",".join(value2) + "\n "
-#           print "key=", key, " value=", value
+        if key in ["recordingType", "penetrationN", "groundCoordinates","referenceCoordinates", \
+                   "extracellularDataType", "cellType", "identificationMethod","spikeSorting"]:
+            key1_list = h5lib.get_value_pointer_by_path_items(extra_grp, [key]).keys()
+            for key1 in key1_list:
+#               print "      key=", key, " key1=", key1
+                value1 = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
+                value2 = [str(v) for v in value1]
+                value += "       " + key1 + ": " + ",".join(value2) + "\n "
+#               print "key=", key, " value=", value
     return value
 
 # ------------------------------------------------------------------------------
 
-def add_shank_group(nwb_object, meta_h5, name, location, \
-                    description_data, options):
-    group_path = "/general/extracellular_ephys"
-    grp = nwb_object.create_group(group_path, abort = False)
-    grp.create_dataset("description", data=description_data)
-
-    ################
-    # patch-clamp metadata
-    # TODO add error checking
+def get_device(meta_h5, options):
+    extra_grp = h5lib.get_value_pointer_by_path_items(meta_h5, \
+                                ["extracellular"])
+    value = ""
+    for key in extra_grp.keys():
+        if key in ["probeSource", "probeType", "ADunit", "amplifierRolloff"]:
+            key1_list = h5lib.get_value_pointer_by_path_items(extra_grp, [key]).keys()
+            for key1 in key1_list:
+#               print "      key=", key, " key1=", key1
+                value1 = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
+                value2 = [str(v) for v in value1]
+                value += "       " + key1 + ": " + ",".join(value2) + "\n "
+    return value
 
 # ------------------------------------------------------------------------------
 
@@ -1718,12 +1761,6 @@ def create_empty_acquisition_series(name, num):
     el_idx = 8 * num + np.arange(8)
     vs.set_dataset("electrode_idx", el_idx)
     vs.set_attr("description", "Place-holder time series to represent ephys recording. Raw ephys data not stored in file")
-
-# ------------------------------------------------------------------------------
-
-def create_electrode_group_location(ee, name, location):
-    eg = ee.make_group("<electrode_group_X>", name)
-    eg.set_dataset("location", location)
 
 # ------------------------------------------------------------------------------
 
@@ -1758,17 +1795,24 @@ def process_ephys_electrode_map(nwb_object, meta_h5, options):
     probe_type = h5lib.get_value_pointer_by_path_items(meta_h5, \
                      ["extracellular", "probeType", "probeType"]).value
 #   print "\nprobe_type=", probe_type
-    description_data = get_description(meta_h5, options)
     rloc = h5lib.get_value_pointer_by_path_items(meta_h5, \
                ["extracellular", "recordingLocation", "recordingLocation"]).value
-#   print "\ndescription_data=", description_data, " rloc=", rloc
+    description = get_description(meta_h5, options)
+    device      = get_device(     meta_h5, options)
+    if options.verbose:
+        print "description=", description
+        print "device=", device
+        print "rloc=", rloc
     for i in range(num_shanks):
         loc = str(rloc[0])
         P = str(shank_coords[i][0])
         Lat = str(shank_coords[i][1])
-        create_electrode_group_location(ee, "shank" + str(i), \
-            "loc: " + loc + ", P: " + P + ", Lat: " + Lat + ", recordingLocation=" + rloc)
-
+        location = "loc: " + loc + ", P: " + P + ", Lat: " + Lat + ", recordingLocation=" + rloc
+        eg = ee.make_group("<electrode_group_X>", "shank" + str(i))
+        eg.set_dataset("location",    location)
+        eg.set_dataset("description", description)
+        eg.set_dataset("device",      device)
+    
 # ------------------------------------------------------------------------------
 
 def process_laser_and_aom_input_data(orig_h5, nwb_object, options):
@@ -1795,8 +1839,9 @@ def process_laser_and_aom_input_data(orig_h5, nwb_object, options):
     hash_group_pointer = orig_h5["timeSeriesArrayHash"]               
     laser_power = h5lib.get_value2_by_key2(orig_h5["timeSeriesArrayHash"], \
                       keyName1, "",keyName2)
-    group_attrs = {"description" : description[2], "comments" : comments}
-    data_attrs = {"resolution":float('nan'), "unit":"Watts", "conversion":1000.0}   
+    group_attrs = {"description" : description[2], "comments" : comments, \
+                   "source" : "Nuo's data file"}
+    data_attrs = {"resolution":float('nan'), "unit":"Watts", "conversion":1000.0}
     laser_ts = create_time_series("simple_optogentic_stimuli", \
                        "<OptogeneticSeries>", "/stimulus/presentation", \
                        orig_h5, nwb_object, group_attrs, laser_power, timestamps, \
@@ -1808,7 +1853,8 @@ def process_laser_and_aom_input_data(orig_h5, nwb_object, options):
     descr = description[1]
     aom_input_trace= h5lib.get_value2_by_key2(orig_h5["timeSeriesArrayHash"], keyName1, \
                                                       "", keyName2)
-    group_attrs = {"description" : description[1], "comments" : comments}
+    group_attrs = {"description" : description[1], "comments" : comments, \
+                   "source" : "Nuo's data file"}
     data_attrs = {"resolution":float('nan'), "unit":"Volts", "conversion":1.0}
     aom_ts = create_time_series("aom_input_trace", "<TimeSeries>", \
                        "/stimulus/presentation", orig_h5, nwb_object, group_attrs, \
@@ -2034,7 +2080,6 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
         print "Closing file"
 
     nwb_object.close()
-    print "Done"
 
 # ------------------------------------------------------------------------------
 
