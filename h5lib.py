@@ -118,12 +118,27 @@ def get_value2_by_key2(hash_group1_pointer, key1, hash_group2, key2):
         print "\n                   value_group.keys()=", value_group.keys()
         print "\nlen(value_group.keys())=", len(value_group.keys()), " ind=", ind
         print "In get_value2_by_key2: level2 key_list=", value_group.keys()
+    print "str(ind+1)=", str(ind+1), " value_group.keys()=", value_group.keys()
     if str(ind+1) in value_group.keys():
         value_pointer = value_group[str(ind+1)]
-        if verbose:
-            print "value_pointer.keys()=", value_pointer.keys(), "; hash_group2=", hash_group2
-#       if hash_group2 in value_pointer.keys():
-            print "\nhash_group2=", hash_group2
+    else:
+        value_pointer = value_group
+    if verbose:
+        print "value_pointer.keys()=", value_pointer.keys(), "; hash_group2=", hash_group2
+    if 'valueMatrix' in value_pointer.keys() and \
+       'idStr'       in value_pointer.keys():
+       # NL data
+       print " NL data"
+       key_list2 = np.array(value_pointer['idStr/idStr']).tolist()
+#      try:
+       ind2 = key_list2.index(key2)
+       if verbose:
+           print "ind2=", ind2, "\n"
+       value2 = value_pointer['valueMatrix/valueMatrix'][:,ind2]
+#      except:
+#           sys.exit("\nCannot determine value2 in get_value2_by_key2")
+    else: 
+        # SP data
         try:
             value_pointer2 = value_pointer[hash_group2]
             value2 = get_value_by_key(value_pointer2, key2)
@@ -166,9 +181,14 @@ def get_key_index(key_list, partial_key):
 # ------------------------------------------------------------------------------
 # Returns a pointer to the value 
 def get_value_pointer_by_key(hash_group_pointer, partial_key, verbose):
-    key_list = get_key_list(hash_group_pointer)             
-    ind = get_key_index(key_list, partial_key) + 1
-    value_group_pointer = hash_group_pointer['value/' + str(ind)]
+    key_list = get_key_list(hash_group_pointer)            
+    if len(key_list) > 1: 
+        ind = get_key_index(key_list, partial_key) + 1
+    else:
+        ind = 1
+    value_group_pointer = hash_group_pointer['value']
+    if str(ind) in hash_group_pointer['value/'].keys():
+        value_group_pointer = hash_group_pointer['value/' + str(ind)]
     if verbose:
         print "   In get_value_pointer_by_key: value_group_items=", value_group_pointer.keys(), " ind=", ind
         print "                                item_type(value_group_pointer)=", item_type(value_group_pointer)
@@ -193,6 +213,32 @@ def get_value_pointer_by_key(hash_group_pointer, partial_key, verbose):
     if item_type(value_pointer) == "dataset":
         value_pointer = np.array(value_pointer).tolist()              
     return value_pointer  
+
+# ------------------------------------------------------------------------------
+
+def get_all_keys(orig_h5, meta_h5):
+    all_keys = []
+    # Extract data keys
+    top_groups = get_child_group_names(orig_h5)
+    for group in top_groups:
+        if not re.search("Hash", group):
+            continue
+        group_keys = orig_h5[group].keys()
+        if len(group_keys) < 2:
+            continue
+        path_items = [group, "keyNames", "keyNames"]
+        print "path_items=", path_items
+        key_list = get_value_pointer_by_path_items(orig_h5, path_items)
+        for k in key_list:
+            if not k in all_keys:
+                all_keys.append(k)
+    # Extract metadata keys
+    if len(meta_h5) > 0:
+        top_groups = get_child_group_names(meta_h5)
+        for k in top_groups:
+            if not k in key_list:
+                all_keys.append(k)
+    return all_keys
 
 # ------------------------------------------------------------------------------
 
@@ -242,3 +288,31 @@ def item_type(item_pointer):
         except:
             item_type = "data_item"
     return item_type
+
+
+# ------------------------------------------------------------------------------
+
+def get_data_by_key(nwb_root, item_path, verbose):
+        item_pointer = h5_root[item_path]
+        try:
+            # item is group
+            keys = item_pointer.keys()
+            if verbose:
+#               print "group: path=", item_path, " members=" + str(keys)
+                print "group: path=", item_path, " num_members=", len(keys)
+            for k in keys:
+                if len(item_path) == 1:                # item_path == '/'
+                    item_path1 = item_path + k
+                else:
+                    item_path1 = item_path + '/' + k
+                parse_h5_item(h5_root, item_path1, verbose)
+        except:
+            # item is dataset
+            try:
+                data = np.array(item_pointer)
+                if verbose:
+                    print "dataset: path=", item_path, " , shape=", data.shape, \
+                          " , dtype=", data.dtype, " data=", data.tolist()
+            except:
+                sys.exit("Path " + path + " is not valid")
+
