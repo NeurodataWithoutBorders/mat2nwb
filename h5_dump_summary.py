@@ -11,7 +11,7 @@ import h5lib
 def parse_h5_item(h5_root, item_path, verbose):
         item_pointer = h5_root[item_path]
         try:
-            # item is group
+            # item is a group
             keys = item_pointer.keys()
             if verbose:
 #               print "group: path=", item_path, " members=" + str(keys)
@@ -23,12 +23,12 @@ def parse_h5_item(h5_root, item_path, verbose):
                     item_path1 = item_path + '/' + k
                 parse_h5_item(h5_root, item_path1, verbose)
         except:
-            # item is dataset
+            # item is a dataset
             try:
                 data = np.array(item_pointer)
                 if verbose:
                     print "dataset: path=", item_path, " , shape=", data.shape, \
-                          " , dtype=", data.dtype
+                          " , dtype=", data.dtype, " data=", data.tolist()
             except:
                 sys.exit("Path " + path + " is not valid")
 
@@ -43,7 +43,7 @@ if __name__ == "__main__":
             verbose = int(sys.argv[2])
 #           print "verbose=", verbose
     else:
-        sys.exit("\nUsage: h5_dump_summary.py <h5_file_or_dir> \n")
+        sys.exit("\nUsage: h5_dump_all.py <h5_file_or_dir> \n")
 
     file_list = h5lib.get_file_list(h5_data, "")
 
