@@ -1,4 +1,4 @@
-#!/usr/local/python-3.5.1/bin/python3
+#!/usr/local/python-3.5.2/bin/python3
 
 #
 # Copyright (C) 2016 by Howard Hughes Medical Institute.
@@ -20,6 +20,7 @@ def mat2hdf5_command_line_parser(parser):
     parser.add_option("-o", "--outfolder", dest="output_folder", help="parent directory for the output tracker folder",metavar="output_folder",default=".")
     parser.add_option("-i", "--inputfolder",dest="input_folder", help="folder containing choreography results", metavar="input_folder", default=".")
     parser.add_option("-m", "--metadata", dest="metadata", help="(comma-separated list of) metadata file(s) to be combined with data file(s)",metavar="metadata",default="")
+    parser.add_option("-r", "--replace",   action="store_true", dest="replace", help="if the output file already exists, replace/overwrite it", default=False)
     parser.add_option("-v", "--verbose",   action="store_true", dest="verbose",               help="increase the verbosity level of output", default=False)
     
     return parser
@@ -251,8 +252,14 @@ def create_hdf5_file(mat_file_name, hdf5_file_name, options):
     # Read the input file and initialize hdf5 object
 #   print "opening mat file ..."
     mat = scipy.io.loadmat(mat_file_name,squeeze_me=True,chars_as_strings=True,struct_as_record=False)
-#   print "opening hdf5 file ..."
-    f  = h5py.File(hdf5_file_name, 'w')  # 'w" stands for truncating if file exists
+    if options.verbose:
+        print("Opening the output hdf5 file " + hdf5_file_name + " ...")
+    if options.replace:
+        os.system("rm -f " + hdf5_file_name)
+    try:
+        f  = h5py.File(hdf5_file_name, 'w')  
+    except:
+        sys.exit("\nPlease, make sure the output file does not exist or can be overwritten, or use option -r")
 
     # Parse mat file and store its contents in hdf5 object
     print ("parsing ...")
