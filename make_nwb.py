@@ -19,7 +19,7 @@ import numpy as np
 from sets import Set
 import re 
 import optparse
-import h5lib 
+import libh5 
 
 # ------------------------------------------------------------------------------
 
@@ -145,25 +145,22 @@ def create_plane_map(orig_h5, plane_map, options):
 
 # fetch start time/date of experiment
 def find_exp_time(input_h5, options):
-    print "\noptions.data_origin=", options.data_origin
-
-    child_groups = h5lib.get_child_group_names(input_h5)
+    child_groups = libh5.get_child_group_names(input_h5)
 #   print("child_groups=", child_groups
     if options.data_origin == "SP":
         # SP data
-        d = h5lib.get_value_by_key(input_h5['/metaDataHash'], \
+        d = libh5.get_value_by_key(input_h5['/metaDataHash'], \
                          "dateOfExperiment")
-        t = h5lib.get_value_by_key(input_h5['/metaDataHash'], \
+        t = libh5.get_value_by_key(input_h5['/metaDataHash'], \
                          "timeOfExperiment")
 #       print("d=", d
 #       print("t=", t
         dt=datetime.datetime.strptime(d+t, "%Y%m%d%H%M%S")
 
     elif options.data_origin in ["NL", "DG"]:
-        print "\ninput_h5.name=", input_h5.name
-        d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+        d = np.array(libh5.get_value_pointer_by_path_items(input_h5, \
                      ["dateOfExperiment", "dateOfExperiment"])).tolist()[0]
-        t = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+        t = np.array(libh5.get_value_pointer_by_path_items(input_h5, \
                      ["timeOfExperiment", "timeOfExperiment"])).tolist()[0]
         try:
             if re.search("not recorded", t):
@@ -175,7 +172,7 @@ def find_exp_time(input_h5, options):
             t = re.sub('\x00','', t)
             dt = datetime.datetime.strptime(d+t, "%Y%m%d")
     elif options.data_origin == "JY":
-        d = np.array(h5lib.get_value_pointer_by_path_items(input_h5, \
+        d = np.array(libh5.get_value_pointer_by_path_items(input_h5, \
                          ["dateOfExperiment", "dateOfExperiment"])).tolist()[0]
         print("date=", "20"+d)
         dt = datetime.datetime.strptime("20"+d, "%Y%m%d")
@@ -222,10 +219,9 @@ def save_2p_frames(external_file, starting_frame, timestamps, fname, stack_t):
 # masterImages are store in:
 #        tsah::descrHash::[2-7]::value::1::[1-3]::masterImage
 # each image has 2 color channels, green and red
-ref_image_red   = {}
-ref_image_green = {}
-def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
-                           plane, options, num_plane = 3):
+def update_reference_images(orig_h5, nwb_object, master_shape, \
+                            ref_image_red, ref_image_green, plane_map, area, \
+                            plane, options, num_plane = 3):
     area_grp = orig_h5["timeSeriesArrayHash/descrHash"]["%d"%(1+area)]
     if num_plane == 1:
         plane_grp = area_grp["value/1"]
@@ -233,50 +229,48 @@ def create_reference_image(orig_h5, nwb_object, master_shape, plane_map, area, \
         plane_grp = area_grp["value/1"]["%d"%(plane)]
     master = plane_grp["masterImage"]["masterImage"].value
     master1_shape = np.array(master).shape
+
     green = np.zeros([master1_shape[0],master1_shape[1]])
     red   = np.zeros([master1_shape[0],master1_shape[1]])
-    for i in range(master1_shape[0]):
-        for j in range(master1_shape[1]):
-            if len(master1_shape) == 3 or not options.handle_errors:
-                green[i][j] = master[i][j][0]
-                red[i][j]   = master[i][j][1]
-            else:
-                # Warning: only one master image is available, so the green and red signals will be identical
-                green[i][j] = master[i][j]
-                red[i][j]   = master[i][j]
+    if len(master1_shape) == 3 or not options.handle_errors:
+        green = master[:,:,0]
+        red   = master[:,:,1]
+    else:
+        green = master
+        red   = master
+
     # convert from file-specific area/plane mapping to
     #   inter-session naming convention
     oname = "area%d_plane%d" % (area, plane)
     master_shape[oname] = master1_shape
     image_plane = plane_map[oname]
+    ref_image_green[image_plane] = green
+    ref_image_red[image_plane] = red
+
+    # Store green and red referebce images
     fmt = "raw"
 
-    # Green referebce image
     name = image_plane + "_green"
     desc = "Master image (green channel), in " + str(master1_shape[0]) + \
            "x" + str(master1_shape[1]) + ", 8bit"
     nwb_object.set_dataset("<image_X>", green.astype('uint8'), name=name,\
                            dtype='uint8', attrs={"description":desc, \
                            "format": fmt})
-    ref_image_green[image_plane] = green
 
-    # Use the green ref image as reference frame in /general/optophysiology/fov_xx
-    general_group  = nwb_object.make_group("general", abort=False)
-    optophys_group = general_group.make_group("optophysiology", abort=False)
-#   fov_xx_group = nwb_object["general/optophysiology/" + image_plane]
-    fov_xx_group   = optophys_group.make_group("<imaging_plane_X>", name=image_plane, abort=False)
-    fov_xx_group.set_dataset("reference_frame", "3.6 mm lateral (left), 1.6 mm posterior Bregma, 0 mm depth") 
-
-    # Red referebce image
     name = image_plane + "_red"
     desc = "Master image (red channel), in " + str(master1_shape[0]) + \
            "x" + str(master1_shape[1]) + ", 8bit"
     nwb_object.set_dataset("<image_X>", red.astype('uint8'), name=name, \
                            dtype='uint8', attrs={"description":desc, \
                            "format": fmt})
-    ref_image_red[image_plane] = red
 
-    return master_shape
+    # Use the green ref image as reference frame in /general/optophysiology/fov_xx
+    general_group  = nwb_object.make_group("general", abort=False)
+    optophys_group = general_group.make_group("optophysiology", abort=False)
+    fov_xx_group   = optophys_group.make_group("<imaging_plane_X>", name=image_plane, abort=False)
+    fov_xx_group.set_dataset("reference_frame", "3.6 mm lateral (left), 1.6 mm posterior Bregma, 0 mm depth") 
+
+    return (master_shape, ref_image_red, ref_image_green)
 
 # ------------------------------------------------------------------------------
 
@@ -407,29 +401,12 @@ def create_time_series(series_name, series_type, series_path, \
     if options.verbose:
         print("    Creating group " + str(series_name) +  " type=" + str(series_type)+ " path=" + str(series_path))
     if len(series_path) > 0:
+        print "Creating ts ", series_name, " at series_path=", series_path
         ts = nwb_group.make_group(series_type, series_name, path = series_path, \
                                   attrs = group_attrs)
     else:
+        print "Creating ts ", series_name
         ts = nwb_group.make_group(series_type, series_name, attrs = group_attrs)
-#   if keyName in ["poleInReach", "rewardCue", "leftReward", "rightReward", \
-#                  "leftLicks", "rightLicks", "whiskerVars", "touches"]:
-
-    # Get rid of NaNs   
-#   if len(var) == 0:
-#       t_not_nan = t[np.isfinite(np.array(t))]
-#       if options.verbose:
-#           print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
-#       t = t_not_nan
-#   else:
-#       print("np.array(t).shape=", np.array(t).shape, " np.array(var).shape=", np.array(var).shape
-#       t_not_nan = t[np.isfinite(np.array(t)) & np.isfinite(np.array(var))]
-#       v_not_nan =     var[np.isfinite(np.array(t)) & np.isfinite(np.array(var))]
-#       if options.verbose:
-#           print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
-#       t   = t_not_nan
-#       var = v_not_nan
-#   if options.verbose:
-#           print series_name + " has %d nans (removed)" % (len(t) - len(t_not_nan))
 
     # 1)  Data = on_off 
     if series_name in ["water_left",      "water_right", \
@@ -462,7 +439,7 @@ def create_time_series(series_name, series_type, series_path, \
         timestamps = t
 
     # 3) Data = value
-    elif series_name in ["whisker_angle", "whisker_curve", \
+    elif series_name in ["whisker_angle", "whisker_curve", "pole_position", \
                          "lick_trace", "photostim_control"] \
        or re.search("photostimulus_", series_name) \
        or keyName in ["whiskerVars", "Ephys"]:
@@ -491,10 +468,10 @@ def process_pole_position(orig_h5, nwb_object, options):
         # create time series for stimulus/presentation group
         keyName = "poleInReach"
         hash_group_pointer = orig_h5['eventSeriesArrayHash']
-        grp = h5lib.get_value_pointer_by_key(hash_group_pointer , keyName, \
+        grp = libh5.get_value_pointer_by_key(hash_group_pointer , keyName, \
                                               options.debug)
         t = grp["eventTimes/eventTimes"].value * 0.001
-        description = h5lib.get_description_by_key(hash_group_pointer , keyName)
+        description = libh5.get_description_by_key(hash_group_pointer , keyName)
         group_attrs = {"source" : "Intervals are as reported in Simon's data file", \
                        "description" : description}
         data_attrs  = {"unit": "None", "conversion": 1.0, "resolution":0.0}
@@ -518,19 +495,33 @@ def process_pole_position(orig_h5, nwb_object, options):
                        orig_h5, pole_iface, group_attrs, '', t, data_attrs, \
                        hash_group_pointer, keyName, options)
     elif options.data_origin in ["NL", "JY", "DG"]:
-        # NL or JY data
         hash_group_pointer = orig_h5["trialPropertiesHash"]
         source = "Times as reported in motor cortex data file, but relative to session start"
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
         grp = orig_h5["trialPropertiesHash/value/"]
-        time = grp["1/1"].value
         series_path = "/stimulus/presentation"
+
+        if options.data_origin == "DG":
+            # handle pole_pos data
+            keyName = "PolePos"
+            data = grp["1/1"].value
+            time = grp["2/2"].value
+            t = time + trial_start_times
+            description = libh5.get_description_by_key(hash_group_pointer, keyName)
+            group_attrs = {"source": source, "description" : description}
+            data_attrs  = {"resolution":0.1,"conversion":1.0} 
+            pole_position = create_time_series("pole_position", "<TimeSeries>", series_path,\
+                       orig_h5, nwb_object, group_attrs, data, t, data_attrs, \
+                       hash_group_pointer, keyName, options)
 
         # get relevant pole_in data
         keyName1 = "PoleInTime"
-        time = grp["1/1"].value
+        if options.data_origin in ["NL", "JY"]:
+            time = grp["1/1"].value
+        else:
+            time = grp["2/2"].value
         t = time + trial_start_times
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName1)
+        description = libh5.get_description_by_key(hash_group_pointer, keyName1)
         group_attrs = {"source": source, "description" : description}
         data_attrs  = {"resolution":0.1,"conversion":1.0} 
         pole_in  = create_time_series("pole_in", "<TimeSeries>", series_path,\
@@ -539,9 +530,12 @@ def process_pole_position(orig_h5, nwb_object, options):
 
         # same procedure for pole_out
         keyName2 = "PoleOutTime"
-        time = grp["2/2"].value
+        if options.data_origin in ["NL", "JY"]:
+            time = grp["2/2"].value
+        else:
+            time = grp["3/3"].value
         t = time + trial_start_times
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName2)
+        description = libh5.get_description_by_key(hash_group_pointer, keyName2)
         group_attrs = {"source": source, "description" : description}
         data_attrs  = {"resolution":float('nan'),"unit":"unknown","conversion":1.0}    
         pole_out = create_time_series("pole_out", "<TimeSeries>", series_path,\
@@ -553,8 +547,6 @@ def process_pole_position(orig_h5, nwb_object, options):
 # ------------------------------------------------------------------------------
         
 # licks
-# BehavioralEvent (lick_left)
-# BehavioralEvent (lick_right)
 def process_licks(orig_h5, nwb_object, options):
     if options.data_origin in ["SP", "JY"]:
         mod = nwb_object.make_group("<Module>", "Licks", attrs = \
@@ -575,8 +567,8 @@ def process_licks(orig_h5, nwb_object, options):
 
         # Handle left licks
         keyName1 = 'leftLicks'
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName1)
-        grp = h5lib.get_value_by_key(hash_group_pointer, keyName1)
+        description = libh5.get_description_by_key(hash_group_pointer, keyName1)
+        grp = libh5.get_value_by_key(hash_group_pointer, keyName1)
         t = grp["eventTimes/eventTimes"].value * 0.001
         print("In processing licks: len(t)=" + str(len(t)))
         data_attrs = {"description": description, \
@@ -588,8 +580,8 @@ def process_licks(orig_h5, nwb_object, options):
 
         # Handle right licks      
         keyName2 = 'rightLicks'             
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName2) 
-        grp = h5lib.get_value_by_key(hash_group_pointer, keyName2)  
+        description = libh5.get_description_by_key(hash_group_pointer, keyName2) 
+        grp = libh5.get_value_by_key(hash_group_pointer, keyName2)  
         t = grp["eventTimes/eventTimes"].value * 0.001
         data_attrs = {"description": description, \
                       "source": "Times as reported in Simon's data file",
@@ -597,20 +589,23 @@ def process_licks(orig_h5, nwb_object, options):
         ts_right = create_time_series("lick_right", "<TimeSeries>", "",\
                        orig_h5, lick_iface, group_attrs, '', t, data_attrs, \
                        hash_group_pointer, keyName2, options)
-    elif options.data_origin in ["NL"]:
-        # NL data
-        keyName = "EphusVars"
+    elif options.data_origin in ["NL", "DG"]:
         hash_group_pointer = orig_h5["timeSeriesArrayHash"]
-        lick_trace = hash_group_pointer["value/valueMatrix/valueMatrix"][:,0]
-        grp_name   = "timeSeriesArrayHash/value/time/time"
-        timestamps = orig_h5[grp_name].value
+        if options.data_origin == "NL":
+            keyName = "EphusVars"
+            lick_trace = hash_group_pointer["value/valueMatrix/valueMatrix"][:,0]
+            grp_name   = "timeSeriesArrayHash/value/time/time"
+            timestamps = orig_h5[grp_name].value
+            description = parse_h5_obj(hash_group_pointer["value/idStrDetailed/idStrDetailed"])[0][0]
+        else:  
+            keyName = "lickVars"
+            lick_trace = hash_group_pointer["value/2/valueMatrix/valueMatrix"]
+            timestamps = hash_group_pointer["value/2/time/time"]
+            description = parse_h5_obj(hash_group_pointer["value/2/idStrDetailed/idStrDetailed"])[0][0]
         series_path = "/acquisition/timeseries"
-        timestamps = hash_group_pointer["value/time/time"].value
-        description = parse_h5_obj(hash_group_pointer["value/idStrDetailed/idStrDetailed"])[0][0]
         comment1 = keyName
-        comment2 = h5lib.get_description_by_key(hash_group_pointer, keyName)     
+        comment2 = libh5.get_description_by_key(hash_group_pointer, keyName)     
         comments = comment1 + ": " + comment2
-#       print("comment1=", comment1, " comment2=", comment2, " comments=", comments
         data_attrs={"conversion":1.0, "unit":"unknown", "resolution":float('nan')}  
         group_attrs={"description" : description, "comments" : comments, \
                     "source": "Times as reported in Nuo's data file"}
@@ -625,12 +620,12 @@ def process_licks(orig_h5, nwb_object, options):
 
         # Handle lick times
         keyName = "LickTime"
-        description = h5lib.get_description_by_key(hash_group_pointer , keyName)
+        description = libh5.get_description_by_key(hash_group_pointer , keyName)
         data_attrs = {"resolution":0.1,"conversion":1.0,\
                       "description" : description, \
                       "source" : "Lick times as reported in Jianing's data file"}
         trial_start_times = orig_h5["trialStartTimes/trialStartTimes"].value
-        grp = h5lib.get_value_by_key(hash_group_pointer, keyName)
+        grp = libh5.get_value_by_key(hash_group_pointer, keyName)
         start_t = []
         num_trials = len(grp.keys())
         for k in sorted([int(k) for k in grp.keys()]):  
@@ -644,8 +639,6 @@ def process_licks(orig_h5, nwb_object, options):
 # ------------------------------------------------------------------------------
         
 # water
-# BehavioralInterval (water_left)
-# BehavioralInterval (water_right)
 def process_water(orig_h5, nwb_object):
     hash_group_pointer  = orig_h5['eventSeriesArrayHash']
     source = "Intervals are as reported in somatosensory cortex data file"
@@ -654,8 +647,8 @@ def process_water(orig_h5, nwb_object):
     # handling data for stimulus/presentation
     # left water
     keyName1 = "leftReward"
-    description1 = h5lib.get_description_by_key(hash_group_pointer, keyName1)
-    grp = h5lib.get_value_by_key(hash_group_pointer , keyName1)
+    description1 = libh5.get_description_by_key(hash_group_pointer, keyName1)
+    grp = libh5.get_value_by_key(hash_group_pointer , keyName1)
     t1 = grp["eventTimes/eventTimes"].value * 0.001
     group_attrs = {"source" : source, "description" : description1}
     data_attrs  = {"unit": "None", "conversion": 1.0, "resolution":0.0}
@@ -665,8 +658,8 @@ def process_water(orig_h5, nwb_object):
 
     # right water 
     keyName2 = "rightReward"
-    description2 = h5lib.get_description_by_key(hash_group_pointer , keyName2)
-    grp = h5lib.get_value_by_key(hash_group_pointer , keyName2)
+    description2 = libh5.get_description_by_key(hash_group_pointer , keyName2)
+    grp = libh5.get_value_by_key(hash_group_pointer , keyName2)
     t2 = grp["eventTimes/eventTimes"].value * 0.001
     group_attrs = {"source" : source, "description" : description2}
     data_attrs  = {"unit": "None", "conversion": 1.0, "resolution":0.0}
@@ -697,7 +690,6 @@ def process_water(orig_h5, nwb_object):
 # ------------------------------------------------------------------------------
 
 # auditory_cue
-# BehavioralInterval (auditory_cue)
 def process_cue(orig_h5, nwb_object, options):
 
     series_path = "/stimulus/presentation"
@@ -712,7 +704,7 @@ def process_cue(orig_h5, nwb_object, options):
         print "CueTime_description=", description
         cue_timestamps = time + trial_start_times
         hash_group_pointer  = orig_h5['trialPropertiesHash']
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName)
+        description = libh5.get_description_by_key(hash_group_pointer, keyName)
         group_attrs = {"comments" : description,\
                        "description" : keyName, \
                        "source" : "Times are as reported in Nuo's data file, but relative to session time"}
@@ -728,8 +720,8 @@ def process_cue(orig_h5, nwb_object, options):
         # auditory cue 
         hash_group_pointer  = orig_h5['eventSeriesArrayHash']
         keyName = "rewardCue"
-        description = h5lib.get_description_by_key(hash_group_pointer, keyName)
-        grp = h5lib.get_value_by_key(hash_group_pointer, keyName)
+        description = libh5.get_description_by_key(hash_group_pointer, keyName)
+        grp = libh5.get_value_by_key(hash_group_pointer, keyName)
         t = grp["eventTimes/eventTimes"].value * 0.001
         group_attrs = {"description" : "Intervals when auditory cue presented",\
                        "source": "Intervals are as reported in Simon's data file"}
@@ -754,9 +746,6 @@ def process_cue(orig_h5, nwb_object, options):
 def process_whisker(orig_h5, nwb_object, options):
     # create module
     mod = nwb_object.make_group("<Module>", "Whisker")
-    mod.set_custom_dataset("description", \
-        "Whisker angle and curvature (relative) of the whiskers and times when the pole was touched by whiskers")
-
     # Create interface
     whisker_iface = mod.make_group("BehavioralTimeSeries", attrs={
         "source": "Whisker data"})
@@ -764,13 +753,13 @@ def process_whisker(orig_h5, nwb_object, options):
     # Create time series
     keyName = 'whiskerVars'
     hash_group_pointer  = orig_h5['timeSeriesArrayHash']
-    grp   = h5lib.get_value_by_key(hash_group_pointer , keyName)   
+    grp   = libh5.get_value_by_key(hash_group_pointer , keyName)   
 # GD scaling must be read in from input file
     t     = grp["time/time"].value * 0.001
     
     if options.data_origin == "SP":
-        # SP data
-
+        mod.set_custom_dataset("description", \
+        "Whisker angle and curvature (relative) of the whiskers and times when the pole was touched by whiskers")
         var   = grp["valueMatrix/valueMatrix"].value 
         if options.handle_errors:
             try:
@@ -808,7 +797,7 @@ def process_whisker(orig_h5, nwb_object, options):
                           "source": "Pole intervals as reported in Simon's data file"})
         keyName = "touches"
         hash_group_pointer  =  orig_h5["eventSeriesArrayHash"]
-        grp = h5lib.get_value_by_key(hash_group_pointer , keyName)
+        grp = libh5.get_value_by_key(hash_group_pointer , keyName)
 
         # protraction touches
         t = grp["eventTimes/1/1"].value * 0.001
@@ -847,12 +836,42 @@ def process_whisker(orig_h5, nwb_object, options):
                 whisker_var = create_time_series(series_name, "<TimeSeries>", "", \
                                   orig_h5, whisker_iface, group_attrs, var, t, {},\
                                   hash_group_pointer, keyName, options)
+    elif options.data_origin == "DG":
+        keyName = "whiskerVars"
+        mod.set_custom_dataset("description", \
+        "Whisker variables: 'Whisker Angle at Base', 'Change in whisker curvature', 'Time of touch onset', 'Time of touch offset' and 'Time points in which a twitch occured'") 
+        grp1 = hash_group_pointer["value/1"]
+        timestamps = grp1["time/time"]    
+        comment1 = keyName
+        comment2 = libh5.get_description_by_key(hash_group_pointer, keyName)
+        comments = comment1 + ": " + comment2
+#       print("comment1=", comment1, " comment2=", comment2, " comments=", comments
+        data_attrs={"conversion":1.0, "unit":"unknown", "resolution":float('nan')}
+        num_vars = len(np.array(grp1["id/id"]).tolist())
+        key_map = {"thetaAtBase_1_whisker" :  "whisker_angle_1", \
+                   "deltaKappa_1_whisker" :   "whisker_curvature_1", \
+                   "touch_onset_1_whisker" :  "touch_onset_1", \
+                   "touch_offset_1_whisker" : "touch_offset_1",  \
+                   "blockMask_1_whisker" :    "block_mask_1"}
+
+        for i in range(0, num_vars):
+            var =  grp1["valueMatrix/valueMatrix"][:,i]
+            series_name = grp1["idStr/idStr"][i]
+            if series_name in key_map.keys():
+                series_name = key_map[series_name]
+            description = grp1["idStrDetailed/idStrDetailed"][i]
+            group_attrs={"description" : description, "comments" : comments, \
+                         "source": "Times as reported in Diego's data file"}
+            whisker_var = create_time_series(series_name, "<TimeSeries>", "",\
+                      orig_h5, whisker_iface, group_attrs, var, timestamps, data_attrs, \
+                      hash_group_pointer, keyName, options)
 
 # ------------------------------------------------------------------------------
 
 def process_pole_touches(orig_h5, nwb_object, options):
+    keyName1 = "touches"
     keyName2 = "kappaMaxAbsOverTouch"
-    kappa_ma_pr = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
+    kappa_ma_pr = libh5.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/1", keyName2)
     pole_tp_path = "processing/Whisker/BehavioralEpochs/pole_touch_protract"
     if options.handle_errors:
@@ -866,7 +885,7 @@ def process_pole_touches(orig_h5, nwb_object, options):
         pole_tp_grp.create_dataset("kappa_max_abs_over_touch", data=kappa_ma_pr)
 
     # add kappaMaxAbsOverTouch to pole_touch_retract
-    kappa_ma_re = h5lib.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
+    kappa_ma_re = libh5.get_value2_by_key2(orig_h5["eventSeriesArrayHash"], keyName1, \
                                                    "eventPropertiesHash/2", keyName2)
     pole_tr_path = "processing/Whisker/BehavioralEpochs/pole_touch_retract"
     try:
@@ -879,10 +898,10 @@ def process_pole_touches(orig_h5, nwb_object, options):
 
 def process_stimulus(orig_h5, nwb_object):
     keyName = "StimulusPosition"
-    stim_pos = h5lib.get_value_by_key(orig_h5['trialPropertiesHash'], keyName)
+    stim_pos = libh5.get_value_by_key(orig_h5['trialPropertiesHash'], keyName)
     trial_t = orig_h5["trialStartTimes/trialStartTimes"].value * 0.001
     rate = (trial_t[-1] - trial_t[0])/(len(trial_t)-1)
-    description = h5lib.get_description_by_key(orig_h5["trialPropertiesHash"], keyName)
+    description = libh5.get_description_by_key(orig_h5["trialPropertiesHash"], keyName)
     zts = nwb_object.make_group("<TimeSeries>", "zaber_motor_pos", path="/stimulus/presentation",\
                            attrs={"description": description})
     zts.set_attr("source", "Simon's somatosensory cortex data file")
@@ -895,21 +914,21 @@ def process_stimulus(orig_h5, nwb_object):
 def process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options):
     gg = nwb_object.make_group("general", abort=False)
                     
-    cellType             = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    cellType             = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "cellType",             "cellType"])[0]
-    groundCoordinates    = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    groundCoordinates    = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "groundCoordinates",    "groundCoordinates"])[0]
-    identificationMethod = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    identificationMethod = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "identificationMethod", "identificationMethod"])[0]
-    probeType            = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    probeType            = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "probeType",            "probeType"])[0]
-    recordingCoordinates = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    recordingCoordinates = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "recordingCoordinates", "recordingCoordinates"])[0]
-    recordingLocation    = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    recordingLocation    = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "recordingLocation",    "recordingLocation"])[0][0]
-    recordingMarker      = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    recordingMarker      = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "recordingMarker",      "recordingMarker"  ])[0][0]
-    recordingType        = h5lib.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
+    recordingType        = libh5.get_value_pointer_by_path_items(meta_h5, ["intracellular",\
                            "recordingType",        "recordingType"     ])[0][0]
 
     print "recordingType=", recordingType, " recordingMarker=", recordingMarker, " identificationMethod=", identificationMethod
@@ -930,7 +949,7 @@ def process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options):
     mod = nwb_object.make_group("<Module>", "IntracellularEphys")
     keyName = 'Ephys'
     hash_group_pointer  = orig_h5['timeSeriesArrayHash']
-    mod_descr = h5lib.get_description_by_key(hash_group_pointer, keyName)
+    mod_descr = libh5.get_description_by_key(hash_group_pointer, keyName)
     mod.set_attr("description", mod_descr)
 
     # Create interface
@@ -938,7 +957,7 @@ def process_intracellular_ephys_data(orig_h5, meta_h5, nwb_object, options):
                      {"source" : "Intracellular ephys data as reported in Jianing's data file"})
 
     # Create time series
-    grp   = h5lib.get_value_by_key(hash_group_pointer , keyName)
+    grp   = libh5.get_value_by_key(hash_group_pointer , keyName)
     time = np.transpose(np.array(grp["time/time"]))
     t = []
     for i in range(time.shape[0]):
@@ -985,8 +1004,8 @@ def create_trials(orig_h5, nwb_object, options):
     ival     = (trial_t[-1] - trial_t[0]) / (len(trial_t) - 1)
     trial_t  = np.append(trial_t, trial_t[-1] + 2*ival)
 
-    if options.data_origin in ["NL", "DG"]:
-        good_trials = h5lib.get_value_by_key(orig_h5["/trialPropertiesHash"],  "GoodTrials")
+    if options.data_origin == "NL":
+        good_trials = libh5.get_value_by_key(orig_h5["/trialPropertiesHash"],  "GoodTrials")
         ignore_ivals_start = [time for (time, good_trial) in zip(trial_t,good_trials) if good_trial == 0]
         # trial stop isn't stored. assume that it's twice the duration of other
         #   trials -- padding on the high side shouldn't matter
@@ -996,21 +1015,35 @@ def create_trials(orig_h5, nwb_object, options):
         if options.data_origin == "NL":
             keyName3 = "PhotostimulationType"
             hash_group_pointer2 = orig_h5["/trialPropertiesHash"]
-            stimulus_types = np.array(h5lib.get_value_by_key(hash_group_pointer2, keyName3)).tolist()
+            stimulus_types = np.array(libh5.get_value_by_key(hash_group_pointer2, keyName3)).tolist()
             count_1 = stimulus_types.count(1)
             count_2 = stimulus_types.count(2)
-
+    elif options.data_origin == "DG":
+        good_trials_whiskers = orig_h5['trialPropertiesHash/value/5/5'].value
+        good_trials_units    = orig_h5['trialPropertiesHash/value/6/6'].value
+        if len(good_trials_whiskers.shape) > 1:
+            good_trials = good_trials_whiskers[0]
+            for i in range(1,good_trials_whiskers.shape[0]):
+                good_trials = [int(c) for c in np.logical_and(good_trials, good_trials_whiskers[i])]
+        else:
+            good_trials = good_trials_whiskers
+        if len(good_trials_units.shape) > 1:
+            for i in range(0,good_trials_units.shape[0]):
+                good_trials = [int(c) for c in np.logical_and(good_trials, good_trials_units[i])]
+        else:
+            good_trials = [int(c) for c in np.logical_and(good_trials, good_trials_units)]
+        print "good_trials_whiskers.shape=", good_trials_whiskers.shape
+        print "good_trials_whiskers=", good_trials_whiskers
+        print "good_trials_units.shape=", good_trials_units.shape
+        print "good_trials_units=", good_trials_units
+        print "good_trials=", good_trials
     elif options.data_origin in ["JY"]:
-        ephys_value_pointer = h5lib.get_value_by_key(orig_h5["/timeSeriesArrayHash"], "Ephys")
-        time = np.array(h5lib.get_value_pointer_by_path_items(ephys_value_pointer, ["time", "time"]))
+        ephys_value_pointer = libh5.get_value_by_key(orig_h5["/timeSeriesArrayHash"], "Ephys")
+        time = np.array(libh5.get_value_pointer_by_path_items(ephys_value_pointer, ["time", "time"]))
     for i in range(len(trial_id)):
         tid = trial_id[i]
         trial = "trial_%d%d%d" % (int(tid/100), int(tid/10)%10, tid%10)
-        # pole_pos_path = "trialPropertiesHash/value/3/3"
-        #         pole_pos = str(orig_h5[pole_pos_path].value[i])
-        #         epoch.description = ("Stimulus position - in Zaber motor steps (approximately, 10,000 = 1 mm): " + pole_pos)
         if options.data_origin in ["NL", "DG"]:
-            # NL data
             start = trial_t[i]
             stop  = trial_t[i+1]
             epoch = nwb_utils.create_epoch(nwb_object, trial, start, stop)
@@ -1026,6 +1059,7 @@ def create_trials(orig_h5, nwb_object, options):
             except:
                 sys.err("   Unable to create dataset 'tag' containing " + str(tags))
             # keep with tradition and create a units field, even if it's empty
+#           print "trial=", trial, " epoch_units=", epoch_units
             if trial not in epoch_units:
                 units = ["NA"]
             else:
@@ -1035,7 +1069,10 @@ def create_trials(orig_h5, nwb_object, options):
             except:
                 print "   Unable to create dataset 'units_present' containing ", units
 
-            raw_path = "descrHash/value/%d" % (trial_id[i])
+            if not options.data_origin == "DG":
+                raw_path = "descrHash/value/%d" % (trial_id[i])
+            else:
+                raw_path = "descrHash/value/value"
             raw_file = parse_h5_obj(orig_h5[raw_path])[0]
             if len(raw_file) == 1:
                 raw_file = 'na'
@@ -1076,7 +1113,7 @@ def create_trials(orig_h5, nwb_object, options):
             # loop through whiskerVars
             keyName = 'whiskerVars'
             hash_group_pointer  = orig_h5['timeSeriesArrayHash']
-            grp   = h5lib.get_value_by_key(hash_group_pointer , keyName)
+            grp   = libh5.get_value_by_key(hash_group_pointer , keyName)
 
             valueMatrix = np.array(grp["valueMatrix/valueMatrix"])
             idStr         = np.array(grp["idStr/idStr"])
@@ -1223,7 +1260,7 @@ def get_trial_types(orig_h5, nwb_object, options):
     num_trial_types    = len(trial_type_strings)
     if options.data_origin == "NL":
         # NL data
-        photostim_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], "PhotostimulationType")
+        photostim_types = libh5.get_value_by_key(orig_h5["trialPropertiesHash"], "PhotostimulationType")
     elif options.data_origin == "SP":
         # SP data
         valid_whisker = get_valid_trials(orig_h5, "whisker", options)
@@ -1232,7 +1269,7 @@ def get_trial_types(orig_h5, nwb_object, options):
         print "valid_Ca=", valid_Ca
     elif options.data_origin == "JY":
         # JY data
-        trial_types = h5lib.get_value_by_key(orig_h5["trialPropertiesHash"], 'TrialName')
+        trial_types = libh5.get_value_by_key(orig_h5["trialPropertiesHash"], 'TrialName')
 
     # collect all trials (strings)
     for i in range(num_trial_types):
@@ -1361,12 +1398,13 @@ def set_metadata_from_file(group, keyname, file_name):
 
 # ------------------------------------------------------------------------------
 
-def process_metadata(nwb_object, input_h5, options):
+def process_metadata(nwb_object, data_h5, meta_h5, options):
     if options.verbose:
         print("Processing metadata")
 
+    age      = ""
     genotype = ""
-    subject  = ""
+    subject_description  = ""
     weight   = ""
     animalStrain = ""
     animalSource = ""
@@ -1380,11 +1418,11 @@ def process_metadata(nwb_object, input_h5, options):
 
     # Add citation info
     if options.data_origin in ["NL", "JY", "DG"]:
-        key_list = h5lib.get_child_group_names(input_h5)
-        group_pointer = input_h5
+        key_list = libh5.get_child_group_names( meta_h5)
+        group_pointer =  meta_h5
     elif options.data_origin == "SP":
-        key_list = h5lib.get_key_list(input_h5["metaDataHash"])
-        group_pointer = input_h5['/metaDataHash']
+        key_list = libh5.get_key_list( meta_h5["metaDataHash"])
+        group_pointer =  meta_h5['/metaDataHash']
 
     for k in ["citation", "virus"]:
         if not k in key_list:
@@ -1405,7 +1443,7 @@ def process_metadata(nwb_object, input_h5, options):
             # Note: these are two-level groups
             value = ""
             try:
-                key1_list = h5lib.get_value_pointer_by_path_items(group_pointer, [key]).keys()
+                key1_list = libh5.get_value_pointer_by_path_items(group_pointer, [key]).keys()
                 if options.verbose:
                     print("   key=" + key+ " key1_list="+ str(key1_list))
                 if re.search("tracellular", key) and not "impedance" in key1_list:
@@ -1415,16 +1453,19 @@ def process_metadata(nwb_object, input_h5, options):
                         print("      key1="+ key1)
                     if key1 in ["siteLocations"]:
                         continue
-                    elif key1 in ["ADunit", "penetrationN", "groundCoordinates", \
+                    elif key1 in ["ADunit", "penetrationN", \
+                                  "groundCoordinates", "referenceCoordinates", \
                                   "extracellularDataType", "recordingMarker", \
                                   "recordingType", "impedance"]:
-                        value1 = h5lib.get_value_pointer_by_path_items(group_pointer, [key, key1, key1])
+                        value1 = libh5.get_value_pointer_by_path_items(group_pointer, [key, key1, key1])
                         if key1 == "ADunit":
                             ephys_group.set_custom_dataset("ADunit", str(value1[0]))
                         elif key1 == "penetrationN":
                             ephys_group.set_custom_dataset("penetration_num", str(value1[0]))
                         elif key1 == "groundCoordinates":
                             ephys_group.set_custom_dataset("ground_coordinates", value1)
+                        elif key1 == "referenceCoordinates":
+                            ephys_group.set_custom_dataset("reference_coordinates", value1)
                         elif key1 == "extracellularDataType":
                             ephys_group.set_custom_dataset("data_types", value1)
                         elif key1 == "recordingMarker":
@@ -1433,7 +1474,7 @@ def process_metadata(nwb_object, input_h5, options):
                             ephys_group.set_custom_dataset("recording_type", str(value1[0]))
                         elif key1 == "impedance":
                             ephys_group.set_custom_dataset(key1, str(value1[0]))
-                    value1 = h5lib.get_value_pointer_by_path_items(group_pointer, [key, key1, key1])
+                    value1 = libh5.get_value_pointer_by_path_items(group_pointer, [key, key1, key1])
                     if options.verbose:
                         print("      key="+ key+ " key1="+ key1+ " value1="+ str(value1))
                     value2 = [str(v) for v in value1]
@@ -1454,7 +1495,7 @@ def process_metadata(nwb_object, input_h5, options):
 
         elif key == "photostim":
             # Exctract data from HDF5 file and count the number of sites
-            key1_list = h5lib.get_value_pointer_by_path_items(group_pointer, [key]).keys()
+            key1_list = libh5.get_value_pointer_by_path_items(group_pointer, [key]).keys()
             value1 = {}
             if options.verbose:
                 print("key= photostim, key1_list=" + str(key1_list))
@@ -1462,7 +1503,7 @@ def process_metadata(nwb_object, input_h5, options):
             photostim_loc1 = '' 
             for key1 in key1_list:
                 try:
-                    value1[key1] = h5lib.get_value_by_path_items(group_pointer, [key, key1])
+                    value1[key1] = libh5.get_value_by_path_items(group_pointer, [key, key1])
                     if key1 == "photostimLocation":
                         if options.verbose:
                             print("photostimLocation=" + str(value1[key1]))
@@ -1501,16 +1542,15 @@ def process_metadata(nwb_object, input_h5, options):
                         site_group[s].set_custom_dataset("excitation_lambda", value1[key1][0])   
                     
         else:
-            if "metaDataHash" in h5lib.get_child_group_names(input_h5) \
+            if "metaDataHash" in libh5.get_child_group_names( meta_h5) \
                 and not key in ["citation"]:
-                print "\n\n\n   key=", key
-                value = h5lib.get_value_by_key(group_pointer,key)
-                if h5lib.item_type(value) == "dataset":
+                value = libh5.get_value_by_key(group_pointer,key)
+                if libh5.item_type(value) == "dataset":
                     value = np.array(value).tolist()
-                elif h5lib.item_type(value) == "group":
+                elif libh5.item_type(value) == "group":
                     value = value.name
-            elif not "metaDataHash" in h5lib.get_child_group_names(input_h5):                          
-                value_list = np.array(h5lib.get_value_pointer_by_path_items(group_pointer, [key, key])).tolist()
+            elif not "metaDataHash" in libh5.get_child_group_names( meta_h5):                          
+                value_list = np.array(libh5.get_value_pointer_by_path_items(group_pointer, [key, key])).tolist()
                 if len(value_list) == 1:
                     value = value_list[0]
                 elif len(value_list) > 0:
@@ -1527,76 +1567,80 @@ def process_metadata(nwb_object, input_h5, options):
            re.search("animalStrain", key):
             genotype += key + ": " + str(value) + "\n"               
    
-        elif re.search("animalStrain", key):
-            animalStrain += key + ": " + value + "\n"
+        if re.search("animalStrain", key):
+            subject_description += key + ": " + value + "\n"
 
-        elif re.search("animalSource", key):
-            animalSource += key + ": " + value + "\n"
+        if re.search("animalSource", key):
+            subject_description += key + ": " + value + "\n"
 
-        elif key == "animalID":
+        if key == "animalID":
             set_metadata(subject_group, "subject_id", value)
  
-        elif key == "dateOfBirth":
-            subject  = key + ": " + str(value) + "\n"
+        if key == "dateOfBirth":
+            subject_description += key + ": " + str(value) + "\n"
             DOB = str(value)
 
-        elif key == "dateOfExperiment":
-            age = ""
+        if key == "dateOfExperiment":
             if options.verbose:
                 print "\noptions.data_origin=", options.data_origin
-            if options.data_origin == "NL":
+            if len(age) == 0 and options.data_origin == "NL":
                 DOE = str(value)
-                age = ""
                 if len(DOB) ==8 and len(DOE)== 8:                   
                     age = compute_age(DOB, DOE)
                 else:
                     age = "3 to 5 months"
-            elif options.data_origin == "SP":
+            elif len(age) == 0 and options.data_origin == "SP":
                 age = "6 to 8 weeks"
             if len(age) > 0:
-                set_metadata(subject_group, "age", age)
+                set_metadata(subject_group, "age", str(age) + " weeks")
 
-        elif re.search("citation", key):
+        if re.search("citation", key):
             # Add citation info
-            if options.data_origin in ["NL", "SP"]:
+            if options.data_origin in ["NL", "SP", "DG"]:
                 if options.data_origin == "NL":
                     value = "doi: 10.1038/nature14178"
                 elif options.data_origin == "SP":
                     value = "doi: 10.1016/j.neuron.2015.03.027"
+                elif options.data_origin == "DG":
+                    value = "doi:10.1038/nn.4412"
                 set_metadata(general_group, "related_publications", value)
 
-        elif re.search("experimentType", key):
+        if re.search("experimentType", key):
             set_metadata(general_group, "notes", value)
 
-        elif re.search("experimenters", key):
+        if re.search("experimenters", key):
             set_metadata(general_group, "experimenter", value)
 
-        elif key in ["sex", "species", "age", "cell"]:
+        if key in ["sex", "species", "cell"]:
             set_metadata(subject_group, key, value)
 
-        elif re.search("weight", key) and len(str(weight)) == 0:
-            weight = str(value)
-            if len(str(value)) == 0:
-                weight = "not recorded"
-            set_metadata(subject_group, "weight", weight)
+        if key == "age" and len(age) == 0:
+            set_metadata(subject_group, key, str(value) + " weeks")
 
-        elif re.search("referenceAtlas", key):
+        if re.search("weight", key) and len(str(weight)) == 0 and len(str(value)) > 0:
+            weight = str(value)
+            if not options.data_origin == "DG":
+                set_metadata(subject_group, "weight", weight)
+            else:
+                set_metadata(subject_group, "weight", str(float(weight)/1000) + " kg")
+
+        if re.search("referenceAtlas", key):
             general_group.set_custom_dataset("reference_atlas", value)
 
-        elif re.search("whiskerConfig", key):
+        if re.search("whiskerConfig", key):
             general_group.set_custom_dataset("whisker_configuration", value)
 
-        elif key in ["virus", "fiber"]:
+        if key in ["virus", "fiber"]:
             general_group.set_custom_dataset(key, value)
 
-        elif key == "behavior":
-            task_kw = map(str,parse_h5_obj(input_h5["behavior/task_keyword"])[0])
+        if key == "behavior":
+            task_kw = map(str,parse_h5_obj( meta_h5["behavior/task_keyword"])[0])
             nwb_object.set_custom_dataset("task_keywords", task_kw)
 
 #       elif key in ["extracellular", "intracellular"]:
 #           ephys_group.set_custom_dataset(key, value)
     set_metadata(subject_group, "genotype", genotype + "\n")
-    set_metadata(subject_group, "description", animalStrain + "\n" + animalSource + "  " + subject)
+    set_metadata(subject_group, "description", subject_description)
     source_script="https://github.com/NeurodataWithoutBorders/mat2nwb"
     general_group.set_custom_dataset("source_script", source_script)
     if options.data_origin == "NL":
@@ -1613,6 +1657,12 @@ def process_metadata(nwb_object, input_h5, options):
         general_group.set_custom_dataset("surgery",         "doi: 10.1016/j.neuron.2015.03.027")
         general_group.set_custom_dataset("whisker_configuration", "see Table S1 in doi: 10.1016/j.neuron.2015.03.027")
         set_metadata(subject_group, "weight", "not recorded")
+    elif options.data_origin == "DG":
+        general_group.set_custom_dataset("data_collection", "doi:10.1038/nn.4412")
+        general_group.set_custom_dataset("experiment_description",  meta_h5["expDescription/expDescription"].value)
+        general_group.set_custom_dataset("surgery",  meta_h5["surgicalManipulation/surgicalManipulation"].value[0])
+        principal_whisker = libh5.get_value_pointer_by_path_items(data_h5, ["descrHash", "value", "value", "1"])
+        general_group.set_custom_dataset("principal_whisker", principal_whisker)                    
     else:
         print("Missing  data_collection.txt, experiment_description.txt and surgery.txt")
 
@@ -1636,17 +1686,17 @@ def process_behavioral_data(orig_h5, nwb_object, options):
         process_cue(orig_h5, nwb_object, options)
 
 
-    if options.data_origin in ["SP", "JY"]:
+    if options.data_origin in ["SP", "JY", "DG"]:
         # SP and JY data:
         print("    Processing whisker data ...")
         process_whisker(orig_h5, nwb_object, options)
-        
+       
         if options.data_origin == "SP":
             # SP data only
             print("    Processing water data ...")
             process_water(orig_h5, nwb_object)
-#           print("    Processing touches data ...")
-#           process_pole_touches(orig_h5, nwb_object, options)
+            print("    Processing pole touches ...")
+            process_pole_touches(orig_h5, nwb_object, options)
             print("    Processing stimulus data ...")
             process_stimulus(orig_h5, nwb_object)
 
@@ -1654,19 +1704,26 @@ def process_behavioral_data(orig_h5, nwb_object, options):
 
 # collect unit information for a given trial
 epoch_units = {}
-def get_trial_units(orig_h5, nwb_object, unit_num):
+def get_trial_units(orig_h5, nwb_object, unit_num, options):
+    if options.verbose:
+        print "In get_trial_units: unit_num=", unit_num
     for i in range(unit_num):
         i = i+1
         unit = "unit_%d%d" % (int(i/10), i%10)
-        grp_name = "eventSeriesHash/value/%d" % i
+        if unit_num > 1:
+            grp_name = "eventSeriesHash/value/%d" % i
+        else:
+            grp_name = "eventSeriesHash/value"
+        print "grp_name=", grp_name
         grp_top_folder = orig_h5[grp_name]
         trial_ids = grp_top_folder["eventTrials/eventTrials"].value
         trial_ids = Set(trial_ids)
-#       print("trial_ids=", trial_ids)
+        if options.verbose:
+            print("trial_ids=", trial_ids)
         for trial_num in trial_ids:
             tid = trial_num
             trial_name = "trial_%d%d%d" % (int(tid/100), int(tid/10)%10, tid%10)
-            if trial_name not in epoch_units:
+            if trial_name not in epoch_units.keys():
                 epoch_units[trial_name] = []
             epoch_units[trial_name].append(unit)
 
@@ -1679,11 +1736,14 @@ def create_epochs(orig_h5, nwb_object, options):
     print("    Getting trial types ...")
     get_trial_types(orig_h5, nwb_object, options)
 
-    if options.data_origin == "NL":
-        # NL data  only
+    if options.data_origin in ["NL", "DG"]:
         print("    Getting trial units ...")
-        unit_num = len(orig_h5['eventSeriesHash/value'].keys())
-        get_trial_units(orig_h5, nwb_object, unit_num)
+        if options.data_origin == "NL":
+            unit_num = len(orig_h5['eventSeriesHash/value'].keys())
+        else:
+            unit_num = len(orig_h5['eventSeriesHash/keyNames/keyNames'])
+        print "unit_num=", unit_num
+        get_trial_units(orig_h5, nwb_object, unit_num, options)
 
     print("    Creating trials ...")    
     create_trials(orig_h5, nwb_object, options)
@@ -1729,7 +1789,7 @@ def define_manifold(master_shape, plane_map):
 
 # ------------------------------------------------------------------------------
 
-def process_ROIs_and_dFoverF(orig_h5, nwb_object, dff_iface, seg_iface, num_subareas, \
+def process_ROIs_and_DfOverF(orig_h5, nwb_object, dff_iface, seg_iface, num_subareas, \
                              plane_map, master_shape, options):
     # pull out image segmentation data. do it by subarea and imaging plane,
     #   as that's how data is stored in the source file
@@ -1766,8 +1826,10 @@ def process_ROIs_and_dFoverF(orig_h5, nwb_object, dff_iface, seg_iface, num_suba
 
 # ------------------------------------------------------------------------------
 
-def create_master_shape(plane_map, num_subareas, orig_h5, nwb_object, options):
-    master_shape = {}
+def create_reference_images(plane_map, num_subareas, orig_h5, nwb_object, options):
+    master_shape    = {}
+    ref_image_red   = {}
+    ref_image_green = {}
     for subarea in range(num_subareas):
         plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
         if orig_h5[plane_path].keys()[0] == 'masterImage':
@@ -1775,12 +1837,13 @@ def create_master_shape(plane_map, num_subareas, orig_h5, nwb_object, options):
         else:
             num_planes = len(orig_h5[plane_path].keys())
         for plane in range(num_planes):
-            master_shape = create_reference_image(orig_h5, nwb_object, \
-                               master_shape, plane_map,subarea+1, \
-                               plane+1, options, num_planes)
+            master_shape, ref_image_red, ref_image_green = \
+                update_reference_images(orig_h5, nwb_object, master_shape, \
+                    ref_image_red, ref_image_green, plane_map,subarea+1, \
+                    plane+1, options, num_planes)
             sys.stdout.write('.')
             sys.stdout.flush()
-    return master_shape
+    return (master_shape, ref_image_red, ref_image_green)
 
 # ------------------------------------------------------------------------------
 
@@ -1801,19 +1864,17 @@ def add_ref_images_to_image_segmentation(seg_iface, plane_map, \
 
 # ------------------------------------------------------------------------------
 
-def process_image_data(orig_h5, nwb_object, plane_map, options):
+def process_image_data(orig_h5, nwb_object, plane_map, master_shape, \
+                       ref_image_red, ref_image_green, options):
     # store master images
     acquisition_group = nwb_object.make_group("acquisition", abort=False)
     acquisition_img_group = acquisition_group.make_group("images", abort=False)
     acquisition_ts_group  = acquisition_group.make_group("timeseries", abort=False)
     acquisition_ts_group.set_custom_dataset("description", "Information about raw image data, which must be obtained from the original data files. 'external_file' provides a list of raw data files; 'external_file.attribute' starting_frame indicates, with 0 as the first value, the frame for this plane at which a given file starts.  Thus, if starting_frame is 0,52,..., then the first file contains frames 1-52, or 0-51. See processing/ROIs/DfOverF for fluorescence change for individual ROIs")
     acquisition_img_group.set_custom_dataset("description", "Mean images for each plane and color channel for the experimental session.  fov_VVPPP_color contains the image, in 8 bit integer format, for subvolume VV and plane PPP.  By convention, plane 001 (of four) is the flyback frame and therefore excluded.  See Peron et al 2015 Neuron for further details (filters, etc.)")
-    num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
-    master_shape = create_master_shape(plane_map, num_subareas, orig_h5, \
-                                       nwb_object, options)
 
     print("Creating reference images")
-    num_subareas = len(h5lib.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
+    num_subareas = len(libh5.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
     for subarea in range(num_subareas):
         plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
         if orig_h5[plane_path].keys()[0] == 'masterImage':
@@ -1834,7 +1895,7 @@ def process_image_data(orig_h5, nwb_object, plane_map, options):
 
     seg_iface = mod.make_group("ImageSegmentation", attrs={"source": "Simon's datafile"})
 
-    process_ROIs_and_dFoverF(orig_h5, nwb_object, dff_iface, seg_iface, num_subareas, \
+    process_ROIs_and_DfOverF(orig_h5, nwb_object, dff_iface, seg_iface, num_subareas, \
                              plane_map, master_shape, options)
 
     # add reference images to image segmentation
@@ -1972,16 +2033,50 @@ def process_image_data(orig_h5, nwb_object, plane_map, options):
 # ------------------------------------------------------------------------------
 
 def read_probe_locations_matrix(meta_h5, options):
-    num_locs = len(h5lib.get_value_pointer_by_path_items(meta_h5, \
-                   ["extracellular", "siteLocations"]).keys())
-    M = np.zeros([num_locs, 3])
-    for i in range(num_locs):
-        probe_id = i + 1
-        coords = np.array(h5lib.get_value_pointer_by_path_items(meta_h5, \
-                   ["extracellular", "siteLocations", \
-                    str(probe_id), str(probe_id)])).tolist()
-        M[i][:] = coords[:]
-    return M
+    num_locs = 0
+    num_shanks = 0
+    shank_size = 0
+    shank_coords = []
+    if options.data_origin == "NL":
+        num_locs = len(libh5.get_value_pointer_by_path_items(meta_h5, \
+                       ["extracellular", "siteLocations"]).keys())
+        M = np.zeros([num_locs, 3])
+        for i in range(num_locs):
+            probe_id = i + 1
+            coords = np.array(libh5.get_value_pointer_by_path_items(meta_h5, \
+                       ["extracellular", "siteLocations", \
+                        probe_id, probe_id])).tolist()
+            if not options.data_origin == "DG":
+                M[i][:] = coords[i][:]
+            else:
+                M[i][:] = coords[:]
+        num_shanks, shank_size, shank_coords = detect_shanks(M)
+    else:
+        # assuming options.data_origin == "DG"
+        num_shanks = len(libh5.get_value_pointer_by_path_items(meta_h5, \
+                       ["extracellular", "siteLocations"]).keys())
+        shank_size = len(libh5.get_value_pointer_by_path_items(meta_h5, \
+                       ["extracellular", "siteLocations", "1"]).keys())
+        num_locs = shank_size * num_shanks
+        if options.verbose:
+            print "\nshank_size=", shank_size, " num_shanks=", num_shanks, " num_locs=", num_locs
+        M = np.zeros([num_locs, 3])
+        shank_coords = []
+        for i in range(num_shanks):
+            sum_shank_coords = [0., 0., 0.]
+            for j in range(shank_size):
+                orig_coords = libh5.get_value_pointer_by_path_items(meta_h5, \
+                       ["extracellular", "siteLocations", str(i+1), str(j+1), str(j+1)])
+                coords = np.array([float(s)*1.e-6 for s in orig_coords]).tolist()
+                for c in range(3):
+                    sum_shank_coords[c] += coords[c]
+                k = i*shank_size + j
+                if options.verbose:
+                    print "i=", i, " j=", j, " k=", k, " coords=", coords
+                M[k,:] = coords[:]
+            shank_coords.append([float(c)/float(shank_size) for c in sum_shank_coords])
+
+    return (M, num_locs, num_shanks, shank_size, shank_coords)
 
 # ------------------------------------------------------------------------------
 
@@ -2013,7 +2108,7 @@ def detect_shanks(M):
 # ------------------------------------------------------------------------------
 
 def get_description(meta_h5, options):
-    extra_grp = h5lib.get_value_pointer_by_path_items(meta_h5, \
+    extra_grp = libh5.get_value_pointer_by_path_items(meta_h5, \
                                 ["extracellular"])
     value = ""
     for key in extra_grp.keys():
@@ -2022,30 +2117,30 @@ def get_description(meta_h5, options):
 #           print("extra_grp.name=", extra_grp.name, " key=", key)
             try:
                 # getting a dictionary
-                key1_list = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key]).keys()
+                key1_list = libh5.get_value_pointer_by_path_items(extra_grp, [key, key]).keys()
                 for key1 in key1_list:
 #                   print("      key=", key, " key1=", key1)
-                    value1 = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
+                    value1 = libh5.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
                     value2 = [str(v) for v in value1]
                     value += "       " + key1 + ": " + ",".join(value2) + "\n "
 #                   print("key=", key, " value=", value)
             except:
                 # getting a dataset
-                value = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key])
+                value = libh5.get_value_pointer_by_path_items(extra_grp, [key, key])
     return value
 
 # ------------------------------------------------------------------------------
 
 def get_device(meta_h5, options):
-    extra_grp = h5lib.get_value_pointer_by_path_items(meta_h5, \
+    extra_grp = libh5.get_value_pointer_by_path_items(meta_h5, \
                                 ["extracellular"])
     value = ""
     for key in extra_grp.keys():
         if key in ["probeSource", "probeType", "ADunit", "amplifierRolloff"]:
-            key1_list = h5lib.get_value_pointer_by_path_items(extra_grp, [key]).keys()
+            key1_list = libh5.get_value_pointer_by_path_items(extra_grp, [key]).keys()
             for key1 in key1_list:
 #               print("      key=", key, " key1=", key1)
-                value1 = h5lib.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
+                value1 = libh5.get_value_pointer_by_path_items(extra_grp, [key, key1])[:]
                 value2 = [str(v) for v in value1]
                 value += "       " + key1 + ": " + ",".join(value2) + "\n "
     return value
@@ -2068,21 +2163,22 @@ def create_empty_acquisition_series(name, num):
 
 # ------------------------------------------------------------------------------
 
-def process_extracellular_ephys_data(nwb_object, meta_h5, options):
-    M = read_probe_locations_matrix(meta_h5, options)
+def add_devices_info(nwb_object, options):
+    ephys_device_txt = "32-electrode NeuroNexus silicon probes recorded on a PCI6133 National Instrimunts board. See 'general/experiment_description' for more information"
+    nwb_object.set_dataset("<device_X>", ephys_device_txt, name="ephys_acquisition")
+    if options.data_origin == "NL":
+        nwb_object.set_dataset("<device_X>", "Stimulating laser at 473 nm", name="photostim_source")
 
-    # probe = M.tolist()
+def process_extracellular_ephys_data(nwb_object, orig_h5, meta_h5, options):
+    M, num_locs, num_shanks, shank_size, shank_coords = read_probe_locations_matrix(meta_h5, options)
+#   print "M=", M
+
     probe = []
-    sites = parse_h5_obj(check_entry(meta_h5, "extracellular/siteLocations"))
-#   assert len(sites) == 32, "Expected 32 electrode locations, found %d"%len(sites)
-    for i in range(len(sites)):
-        probe.append(sites[i])
-        probe[-1] = probe[-1] * 1.0e-3
-    probe = np.asarray(probe)
-
-    num_shanks, shank_size, shank_coords = detect_shanks(M)
+    for i in range(num_locs):
+        probe.append(M[i,:])
+   
     shank = []
-    for i in range(1, (num_shanks+1)):
+    for i in range(0, (num_shanks)):
         for j in range(shank_size):
             shank.append("shank" + str(i))
     gg = nwb_object.make_group("general", abort=False)
@@ -2091,15 +2187,11 @@ def process_extracellular_ephys_data(nwb_object, meta_h5, options):
     ee.set_dataset('electrode_group', shank)
     ee.set_dataset('filtering', "Bandpass filtered 300-6K Hz")
 
-    ephys_device_txt = "32-electrode NeuroNexus silicon probes recorded on a PCI6133 National Instrimunts board. See 'general/experiment_description' for more information"
-    nwb_object.set_dataset("<device_X>", ephys_device_txt, name="ephys_acquisition")
-    nwb_object.set_dataset("<device_X>", "Stimulating laser at 473 nm", name="photostim_source")
-
     # Creating the shank groups 
-    probe_type = h5lib.get_value_pointer_by_path_items(meta_h5, \
+    probe_type = libh5.get_value_pointer_by_path_items(meta_h5, \
                      ["extracellular", "probeType", "probeType"])
 #   print("\nprobe_type=", probe_type)
-    rloc = h5lib.get_value_pointer_by_path_items(meta_h5, \
+    rloc = libh5.get_value_pointer_by_path_items(meta_h5, \
                ["extracellular", "recordingLocation", "recordingLocation"])
     description = get_description(meta_h5, options)
     device      = get_device(     meta_h5, options)
@@ -2108,22 +2200,28 @@ def process_extracellular_ephys_data(nwb_object, meta_h5, options):
         print("device="      + str(device))
         print("rloc="        + str(rloc))
     for i in range(num_shanks):
-        loc = str(rloc[0])
+        loc = str([str(l) for l in rloc])
         P = str(shank_coords[i][0])
         Lat = str(shank_coords[i][1])
-        location = "loc: " + str(loc) + ", P: " + str(P) + ", Lat: " + str(Lat) + ", recordingLocation=" + str(rloc)
+        location = "loc: " + loc + ", P: " + str(P) + ", Lat: " + str(Lat) 
         eg = ee.make_group("<electrode_group_X>", "shank_" + str(i))
         eg.set_dataset("location",    location)
         eg.set_dataset("description", description)
         eg.set_dataset("device",      device)
 
     # Store the external voltage file name
-    et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
-             attrs = {"description" : "File containing the raw voltage data for this session"})
+    fname = " "
     if options.data_origin == "NL":
+        et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
+             attrs = {"description" : "File containing the raw voltage data for this session"})
         fname = "voltage_filename" + os.path.basename(options.data_path)[13:-3] + ".mat"
-    else:
-        fname = " "
+    elif options.data_origin == "DG":
+        description = orig_h5["descrHash/descr/descr"].value[0]
+        source      = "Diego's data file"
+        et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
+             attrs = {"description" : description, "source" : source })
+#       fname = "voltageTraces_" + os.path.basename(options.data_path)[0:-3] + ".mat"
+        fname = orig_h5["descrHash/value/value"][0]
     et.set_custom_dataset("ephys_raw_data", fname)
     
 # ------------------------------------------------------------------------------
@@ -2135,11 +2233,13 @@ def extract_stimulus_subtrace(orig_trace, time, trial_t, types, types_to_remove,
     
     for i in range(len(types)):
         if str(types[i]) in types_to_remove:
-            print("    Setting to zero values for type=" + str(types[i]))
             start = trial_t[i]
             stop  = trial_t[i+1]
             new_trace[(time >= start) & (time < stop)] = 0.
-            print("start=" + str(start) + " stop=" + str(stop) +  "  " + str(((time >= start) & (time < stop)).sum()) + " values has been reset")
+            if options.verbose:
+                print("start=" + str(start) + " stop=" + str(stop) +  \
+                      "  " + str(((time >= start) & (time < stop)).sum()) + \
+                      " values has been reset")
     return new_trace
 
 # ------------------------------------------------------------------------------
@@ -2147,7 +2247,7 @@ def extract_stimulus_subtrace(orig_trace, time, trial_t, types, types_to_remove,
 def extract_stimulus_subtraces_by_type(orig_h5, laser_power, time, options):
     keyName = "PhotostimulationType"
     hash_group = orig_h5["/trialPropertiesHash"]
-    types = h5lib.get_value_pointer_by_key(hash_group, keyName, 1)
+    types = libh5.get_value_pointer_by_key(hash_group, keyName, options.debug)
     if options.verbose:
         print("    types="+ str(types))
 
@@ -2202,7 +2302,7 @@ def process_laser_and_aom_input_data(orig_h5, meta_h5, nwb_object, options):
     keyName1 = "EphusVars"
     keyName2 = "laser_power" 
     hash_group_pointer = orig_h5["timeSeriesArrayHash"]               
-    laser_power = h5lib.get_value2_by_key2(hash_group_pointer, keyName1, "",keyName2)
+    laser_power = libh5.get_value2_by_key2(hash_group_pointer, keyName1, "",keyName2)
 
     num_traces, trace_types, traces = \
         extract_stimulus_subtraces_by_type(orig_h5, laser_power, timestamps, options)
@@ -2210,15 +2310,15 @@ def process_laser_and_aom_input_data(orig_h5, meta_h5, nwb_object, options):
     group_attrs = {"description" : description[2], "comments" : comments, \
                    "source" : "Nuo's data file"}
     data_attrs = {"resolution":float('nan'), "unit":"mW", "conversion":1000.0}
-
-    print("    num_traces="  + str(num_traces))
-    print("    trace_types=" + str(trace_types))
+    if options.verbose:
+        print("    num_traces="  + str(num_traces))
+        print("    trace_types=" + str(trace_types))
     if num_traces > 0:
         for s in range(num_traces):
             try:
                 # For site_###, copy the data from /general/optogenetics/site_###/location
-                coord = str(h5lib.get_value_by_path_items(meta_h5, ["photostim", "photostimCoordinates"]))
-                loc   = str(h5lib.get_value_by_path_items(meta_h5, ["photostim", "photostimLocation"]))
+                coord = str(libh5.get_value_by_path_items(meta_h5, ["photostim", "photostimCoordinates"]))
+                loc   = str(libh5.get_value_by_path_items(meta_h5, ["photostim", "photostimLocation"]))
                 if options.verbose:
                     print("   Creating time series photostimulus_" + str(trace_types[s]))
                 create_time_series("photostimulus_" + str(trace_types[s]), \
@@ -2251,19 +2351,19 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
     mod = nwb_object.make_group("<Module>", "extracellular_units")
     mod.set_custom_dataset('description', 'Spike times and waveforms')
     try:
-        spike_sorting = h5lib.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
+        spike_sorting = libh5.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
                            "spikeSorting", "spikeSorting"])
     except:
         spike_sorting = "method not recorded"
     mod.set_custom_dataset('spike_sorting', spike_sorting)
     if options.data_origin == "NL":
-        ident_meth1 = str(np.array(h5lib.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
+        ident_meth1 = str(np.array(libh5.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
                                    "identificationMethod", "identificationMethod"])).tolist()[0])
-        ident_meth2 = str(np.array(h5lib.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
+        ident_meth2 = str(np.array(libh5.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
                                    "identificationMethod", "identificationMethod"])).tolist()[2])
         ident_meth  = ident_meth1 + "\n" + ident_meth2
     else:
-        ident_meth  =  str(np.array(h5lib.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
+        ident_meth  =  str(np.array(libh5.get_value_pointer_by_path_items(meta_h5, ["extracellular", \
                                    "identificationMethod", "identificationMethod"])).tolist()[0])
     mod.set_custom_dataset('identification_method', ident_meth)
 
@@ -2274,7 +2374,8 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
     spk_times_iface.set_attr("source", "EventWaveform in this module")
           
     # top level folder
-    unit_descr = np.array(parse_h5_obj(orig_h5['eventSeriesHash/descr/descr'])[0]).tolist()
+    unit_descr = unit_descr = np.array(parse_h5_obj(orig_h5['eventSeriesHash/descr/descr'])[0]).tolist()
+#   print "unit_descr=", unit_descr
     unit_num = len(unit_descr)
     grp_name = "eventSeriesHash/value"
 
@@ -2327,7 +2428,10 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
         spk.set_attr("source", "---")
         spk.set_dataset("timestamps", timestamps)
         spk.set_dataset("data", waveforms, attrs={"resolution":float('nan'), "unit":"Volts", "conversion":0.1})
-        spk.set_dataset("electrode_idx", [channel[0]])
+        if not options.data_origin == "DG":
+            spk.set_dataset("electrode_idx", [channel[0]])
+        else:
+            spk.set_dataset("electrode_idx", [channel])
         spk.set_attr("description", cell_type)
         # spk_waves_iface.add_timeseries(spk)
         # add spk to interface
@@ -2336,7 +2440,7 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
         ug = spk_times_iface.make_group("<unit_N>", unit)
         ug.set_dataset("times", timestamps)
         ug.set_dataset("source", "Data from processed matlab file")
-        ug.set_dataset("unit_description", cell_type)
+        ug.set_dataset("unit_description", unit_descr)
         # spk_times_iface.append_unit_data(unit, "trial_ids", trial_ids)
         ug.set_custom_dataset("trial_ids", trial_ids)
     spk_times_iface.set_custom_dataset("cell_types", cell_types)
@@ -2352,7 +2456,7 @@ def check_keys(orig_h5, meta_h5, options):
     if options.verbose:
         print("known_keys=", sorted(known_keys))
     unknown_keys = []
-    all_keys = h5lib.get_all_keys(orig_h5, meta_h5)
+    all_keys = libh5.get_all_keys(orig_h5, meta_h5)
     if options.verbose:
         print("\nAll keys=", sorted(all_keys))
     for k in all_keys:
@@ -2366,7 +2470,7 @@ def check_keys(orig_h5, meta_h5, options):
 
 # ------------------------------------------------------------------------------
 
-def collect_analysis_information(orig_h5, nwb_object, options):
+def collect_analysis_information(orig_h5, meta_h5, nwb_object, options):
     if options.verbose:
         print("Collecting analysis information")
 
@@ -2388,24 +2492,31 @@ def collect_analysis_information(orig_h5, nwb_object, options):
             j = i + 1
             if j in valid_whisker and j in valid_Ca:
                 good_trials[i] = 1
-    elif options.data_origin in ["SP", "DG"]:
-        good_trials = orig_h5['trialPropertiesHash/value/6/6'].value
+    elif options.data_origin == "DG":
+        good_trials_whiskers = orig_h5['trialPropertiesHash/value/5/5'].value
+        good_trials_units    = orig_h5['trialPropertiesHash/value/6/6'].value
+#       good_trials = [int(c) for c in np.logical_and(good_trials_whiskers, good_trials_units)]
     grp = nwb_object.make_group("analysis", abort=False)
     grp.set_custom_dataset("trial_start_times", trial_start_times)
     grp.set_custom_dataset("trial_type_string", trial_types_all)
     grp.set_custom_dataset("trial_type_mat",    trial_type_mat)
-    grp.set_custom_dataset("good_trials",       good_trials)
-    grp.set_custom_dataset("description", "Trial_type_string has six values, with three response possibilities and two correct responses.  The format is {response type}{correct response}, with response type taking the value Hit, Err, or NoLick, indicating that the animal got the trial right, wrong, or did nothing, respectively.  Corret response is either L or R, indicating that the animal should have licked left or right, respectively.")
+#   grp.set_custom_dataset("good_trials",       good_trials)
+    if options.data_origin == "DG":
+        grp.set_custom_dataset("good_trials_whiskers", good_trials_whiskers)
+        grp.set_custom_dataset("good_trials_units",    good_trials_units)
+        grp.set_custom_dataset("trial_name", orig_h5['trialPropertiesHash/value/4/4'].value)
+        description = meta_h5["sessionDescription/sessionDescription"].value[0]
+    else:
+        description = "Trial_type_string has six values, with three response possibilities and two correct responses.  The format is {response type}{correct response}, with response type taking the value Hit, Err, or NoLick, indicating that the animal got the trial right, wrong, or did nothing, respectively.  Corret response is either L or R, indicating that the animal should have licked left or right, respectively."
+    grp.set_custom_dataset("description", description)
 
 # ------------------------------------------------------------------------------
 
 def set_data_origin(orig_h5, meta_h5, options):
     options.data_origin = "Unknown"
-    if not 'LickTime'  in h5lib.get_key_list(orig_h5["trialPropertiesHash"]) and\
-       not "EphusVars" in h5lib.get_key_list(orig_h5["timeSeriesArrayHash"]):
-        # SP data
+    if len(meta_h5) == 0:
         options.data_origin = "SP"
-    elif "EphusVars" in h5lib.get_key_list(orig_h5["timeSeriesArrayHash"]):
+    elif "EphusVars" in libh5.get_key_list(orig_h5["timeSeriesArrayHash"]):
         # NL data
         options.data_origin = "NL"
     elif "intracellular" in meta_h5.keys():
@@ -2413,7 +2524,8 @@ def set_data_origin(orig_h5, meta_h5, options):
         options.data_origin = "JY"
     else:
         options.data_origin = "DG"
-    print("\nData origin: " + options.data_origin + "\n")
+    if options.verbose:
+        print("\nData origin: " + options.data_origin + "\n")
     return options
 
 # ------------------------------------------------------------------------------
@@ -2442,11 +2554,15 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
 
     vargs = {}
     session_id = os.path.basename(output_nwb)[0:-4]
-    if options.data_origin in ["NL", "JY", "DG"]:
+    if options.data_origin == "NL":
         vargs["start_time"] = find_exp_time(meta_h5, options)
         vargs["description"]= "Extracellular ephys recording of mouse doing discrimination " + \
                               "task (lick left/right), with optogenetic stimulation " +\
                               "plus pole and auditory stimulus" 
+    elif options.data_origin == "DG":
+        vargs["start_time"] = find_exp_time(meta_h5, options)
+        vargs["description"]= str(libh5.get_value_pointer_by_path_items(meta_h5, \
+                     ["sessionDescription", "sessionDescription"])[0])
     else:
         vargs["start_time"] = find_exp_time(orig_h5, options)
         vargs["description"]= "Experiment description (to be added)"
@@ -2461,11 +2577,11 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     # Process metadata
     print("Processing metadata ...")
     if options.data_origin == "SP":
-        # SP data
-        process_metadata(nwb_object, orig_h5, options)
+        process_metadata(nwb_object, orig_h5, orig_h5, options)
     elif options.data_origin in ["NL", "JY", "DG"]:
-        # NL data
-        process_metadata(nwb_object, meta_h5, options)
+        if options.data_origin == "DG":
+            nwb_object.set_custom_dataset("session_id", session_id)
+        process_metadata(nwb_object, orig_h5, meta_h5, options)
     else:
         sys.exit("\nCannot process metadata. Check your input.")
 
@@ -2478,12 +2594,18 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
         plane_map = {}
         create_plane_map(orig_h5, plane_map, options)
         print("After create_plane_map: plane_map=", plane_map)
+        num_subareas = len(libh5.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
+        master_shape, ref_image_red, ref_image_green = \
+            create_reference_images(plane_map, num_subareas, orig_h5, \
+                                nwb_object, options)
         if len(plane_map.keys()) > 0:
-            process_image_data(orig_h5, nwb_object, plane_map, options)
+            process_image_data(orig_h5, nwb_object, plane_map, num_subareas, \
+                               master_shape, ref_image_red, ref_image_green, options)
     elif options.data_origin in ["NL", "DG"]:
         # NL data
         print("Processing extracellular ephys data ...")
-        process_extracellular_ephys_data(nwb_object, meta_h5, options)
+        add_devices_info(nwb_object, options)
+        process_extracellular_ephys_data(nwb_object, orig_h5, meta_h5, options)
         if options.data_origin == "NL":
             process_laser_and_aom_input_data(orig_h5, meta_h5, nwb_object, options)
         process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options)
@@ -2494,7 +2616,7 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
 
     # Perform analysis
     if options.data_origin in ["NL", "SP", "DG"]:
-        collect_analysis_information(orig_h5, nwb_object, options)
+        collect_analysis_information(orig_h5, meta_h5, nwb_object, options)
 
     # Create epochs
     print("Creating epochs ...")
