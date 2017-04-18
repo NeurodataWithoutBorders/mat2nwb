@@ -75,6 +75,8 @@ def item_type(item_value):
 # ----------------------------------------------------------------------
 
 def parse_item(item_name, item_value, hdf5_group, level, upper_folder, options):
+#     if item_name in ('timeSeriesArrayHash', 'descr'):
+#         import pdb; pdb.set_trace()
     if item_type(item_value) == "sparse_matrix":
         if options.verbose:
             print ("...Handling1 sparse_matrix ", item_name, \
@@ -214,7 +216,8 @@ def parse_item(item_name, item_value, hdf5_group, level, upper_folder, options):
             print ("...Handling10 string2 item ", item_name, " in parent folder ", upper_folder, \
                    " item type ", item_type(item_value), \
                    "at level ", level, " item_value=", item_value)
-        data = numpy.chararray((1,), itemsize=100)
+        # data = numpy.chararray((1,), itemsize=100)
+        data = numpy.chararray((1,), itemsize=len(item_value))  # -jt
         data[:] = item_value
         if options.verbose:
            print ("data=", data)
