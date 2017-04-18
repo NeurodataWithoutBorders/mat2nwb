@@ -43,6 +43,25 @@ def check_entry(file_name,obj):
 
 # ------------------------------------------------------------------------------
 
+# function used for natural sort ke
+# from: http://stackoverflow.com/questions/2545532/python-analog-of-natsort-function-sort-a-list-using-a-natural-order-algorithm
+def sortkey_natural(s):
+    return tuple(int(part) if re.match(r'[0-9]+$', part) else part
+                for part in re.split(r'([0-9]+)', s))
+
+# ------------------------------------------------------------------------------
+
+# these (natural_sort and sortkey_natural) added to sort object names in parse_h5_obj
+# so that numerical object names, like "1" "2" "10", "11", "22" are sorted according
+# to their numeric value (int) instead of their string sort order
+def natural_sort(vals):
+    """return sorted numerically if all integers, otherwise, sorted alphabetically"""
+    all_str = all(isinstance(x, (str, unicode)) for x in vals)
+    sv = sorted(vals, key=sortkey_natural) if all_str else sorted(vals)
+    return sv
+
+# ------------------------------------------------------------------------------
+
 def parse_h5_obj(obj, level = 0, output = [], verbose = 0):
     if level == 0:
         output = []
@@ -59,7 +78,7 @@ def parse_h5_obj(obj, level = 0, output = [], verbose = 0):
             if not obj.keys():
                 output.append([])
             else:
-                for key in obj.keys():
+                for key in natural_sort(list(obj.keys())):
                     parse_h5_obj(obj[key], level, output, verbose)
         else:
             output.append([])
@@ -174,7 +193,8 @@ def find_exp_time(input_h5, options):
     elif options.data_origin == "JY":
         d = np.array(libh5.get_value_pointer_by_path_items(input_h5, \
                          ["dateOfExperiment", "dateOfExperiment"])).tolist()[0]
-        print("date=", "20"+d)
+        print "d=", d
+        print("date=", "20"+str(d))
         dt = datetime.datetime.strptime("20"+d, "%Y%m%d")
     else:
         sys.exit("Data origin is unknown")
@@ -1344,9 +1364,12 @@ def get_valid_trials(orig_h5, data, options):
 # ------------------------------------------------------------------------------
 
 def set_metadata(group, keyname, value):
-    if keyname in ["extracellular", "intracellular"]:
-        group.set_dataset("description", value)
-    else:
+    try:
+        if keyname in ["extracellular", "intracellular"]:
+            group.set_dataset("description", value)
+        else:
+            group.set_dataset(keyname, value)
+    except:
         group.set_custom_dataset(keyname, value)   
 
 # ------------------------------------------------------------------------------
@@ -1412,8 +1435,8 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
     value = ""
     DOB   = ""
     general_group = nwb_object.make_group("general", abort=False)
-    general_group.set_custom_dataset("institution", "Janelia Research Campus")
-    general_group.set_custom_dataset("lab",         "Svoboda lab")
+    general_group.set_dataset("institution", "Janelia Research Campus")
+    general_group.set_dataset("lab",         "Svoboda lab")
     subject_group = general_group.make_group("subject", abort=False)
 
     # Add citation info
@@ -1447,7 +1470,7 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
                 if options.verbose:
                     print("   key=" + key+ " key1_list="+ str(key1_list))
                 if re.search("tracellular", key) and not "impedance" in key1_list:
-                    ephys_group.set_custom_dataset("impedance", "not recorded")
+                    ephys_group.set_dataset("impedance", ['not recorded', 'not recorded'])
                 for key1 in key1_list:
                     if options.verbose:
                         print("      key1="+ key1)
@@ -1529,7 +1552,8 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
                     site_group.append(optogen_group.make_group("<site_X>", name=group_name, abort=False))
             for s in range(num_sites):
                 if options.data_origin == "NL":
-                    site_group[s].set_custom_dataset("device", "Ciel 250 mW 473nm Laser from Laser Quantum")
+                    site_group[s].set_dataset("device", "Ciel 250 mW 473nm Laser from Laser Quantum")
+                    site_group[s].set_dataset("description", " ")
                 for key1 in key1_list:
                     if key1 == "stimulationMethod":
                         site_group[s].set_custom_dataset("stimulation_method", str(value1[key1][s]))
@@ -1537,9 +1561,9 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
                         coord = str(value1[key1][s]) + " in mm"
                         if "photostimLocation" in key1_list:
                             coord += "\natlas location: " + str(value1["photostimLocation"][s]) 
-                        site_group[s].set_custom_dataset("location", coord)
+                        site_group[s].set_dataset("location", coord)
                     elif key1 == "photostimWavelength":
-                        site_group[s].set_custom_dataset("excitation_lambda", value1[key1][0])   
+                        site_group[s].set_dataset("excitation_lambda", str(value1[key1][0]))   
                     
         else:
             if "metaDataHash" in libh5.get_child_group_names( meta_h5) \
@@ -1574,7 +1598,7 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
             subject_description += key + ": " + value + "\n"
 
         if key == "animalID":
-            set_metadata(subject_group, "subject_id", value)
+            subject_group.set_dataset("subject_id", value)
  
         if key == "dateOfBirth":
             subject_description += key + ": " + str(value) + "\n"
@@ -1631,7 +1655,7 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
             general_group.set_custom_dataset("whisker_configuration", value)
 
         if key in ["virus", "fiber"]:
-            general_group.set_custom_dataset(key, value)
+            general_group.set_dataset(key, value)
 
         if key == "behavior":
             task_kw = map(str,parse_h5_obj( meta_h5["behavior/task_keyword"])[0])
@@ -1642,7 +1666,7 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
     set_metadata(subject_group, "genotype", genotype + "\n")
     set_metadata(subject_group, "description", subject_description)
     source_script="https://github.com/NeurodataWithoutBorders/mat2nwb"
-    general_group.set_custom_dataset("source_script", source_script)
+    general_group.set_dataset("source_script", source_script)
     if options.data_origin == "NL":
 #       set_metadata(general_group, "experiment_description", \
 #                    "Extracellular ephys recording of mouse doing discrimination " + \
@@ -1864,7 +1888,7 @@ def add_ref_images_to_image_segmentation(seg_iface, plane_map, \
 
 # ------------------------------------------------------------------------------
 
-def process_image_data(orig_h5, nwb_object, plane_map, master_shape, \
+def process_image_data(orig_h5, nwb_object, plane_map, num_subareas, master_shape, \
                        ref_image_red, ref_image_green, options):
     # store master images
     acquisition_group = nwb_object.make_group("acquisition", abort=False)
@@ -1874,7 +1898,6 @@ def process_image_data(orig_h5, nwb_object, plane_map, master_shape, \
     acquisition_img_group.set_custom_dataset("description", "Mean images for each plane and color channel for the experimental session.  fov_VVPPP_color contains the image, in 8 bit integer format, for subvolume VV and plane PPP.  By convention, plane 001 (of four) is the flyback frame and therefore excluded.  See Peron et al 2015 Neuron for further details (filters, etc.)")
 
     print("Creating reference images")
-    num_subareas = len(libh5.get_key_list(orig_h5['timeSeriesArrayHash'])) - 1
     for subarea in range(num_subareas):
         plane_path = 'timeSeriesArrayHash/descrHash/%d/value/1' %(subarea + 2)
         if orig_h5[plane_path].keys()[0] == 'masterImage':
@@ -2193,7 +2216,7 @@ def process_extracellular_ephys_data(nwb_object, orig_h5, meta_h5, options):
 #   print("\nprobe_type=", probe_type)
     rloc = libh5.get_value_pointer_by_path_items(meta_h5, \
                ["extracellular", "recordingLocation", "recordingLocation"])
-    description = get_description(meta_h5, options)
+    description = get_description(meta_h5, options)[0]
     device      = get_device(     meta_h5, options)
     if options.verbose:
         print("description=" + str(description))
@@ -2213,7 +2236,8 @@ def process_extracellular_ephys_data(nwb_object, orig_h5, meta_h5, options):
     fname = " "
     if options.data_origin == "NL":
         et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
-             attrs = {"description" : "File containing the raw voltage data for this session"})
+             attrs = {"description" : "File containing the raw voltage data for this session",
+                      "source" : " "})
         fname = "voltage_filename" + os.path.basename(options.data_path)[13:-3] + ".mat"
     elif options.data_origin == "DG":
         description = orig_h5["descrHash/descr/descr"].value[0]
@@ -2330,7 +2354,7 @@ def process_laser_and_aom_input_data(orig_h5, meta_h5, nwb_object, options):
                                                  path = "/stimulus/presentation",\
                                                  attrs = group_attrs, abort=False)
                  # Create the site_### dataset
-                ts_group.set_custom_dataset("site_" + str(trace_types[s]), \
+                ts_group.set_custom_dataset("site", \
                                             coord + " in mm\natlas location: " + loc)
 
             except:
@@ -2375,7 +2399,7 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
           
     # top level folder
     unit_descr = unit_descr = np.array(parse_h5_obj(orig_h5['eventSeriesHash/descr/descr'])[0]).tolist()
-#   print "unit_descr=", unit_descr
+    print "unit description=", unit_descr
     unit_num = len(unit_descr)
     grp_name = "eventSeriesHash/value"
 
@@ -2385,15 +2409,14 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
     electrode_depths = np.zeros(n)
     # process units
     for i in range(unit_num):
-        i = i+1
         if options.verbose:
             print "i=", i, " unit_num=", unit_num
-        unit = "unit_%d%d" % (int(i/10), i%10)
+        unit = "unit_%d%d" % (int((i+1)/10), (i+1)%10)
         # initialize timeseries
         spk = spk_waves_iface.make_group("<SpikeEventSeries>", unit)
         # get data
         if unit_num > 1:
-            grp_name = "eventSeriesHash/value/%d" % i
+            grp_name = "eventSeriesHash/value/%d" % (i+1)
         grp_top_folder = orig_h5[grp_name]
         timestamps = grp_top_folder["eventTimes/eventTimes"]
         trial_ids = grp_top_folder["eventTrials/eventTrials"]
@@ -2413,13 +2436,13 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
         #         cell_type_1 = grp_top_folder["cellType/1/1"][0,0]
         #         cell_type_2 = grp_top_folder["cellType/2/2"][0,0]
         #         cell_type = cell_type_1 + " and " + cell_type_2
-        cell_types[i-1] = unit + " - " + cell_type
+        cell_types[i] = unit + " - " + cell_type
         try:
             # read in electrode depths and update electrode_depths array
             depth = parse_h5_obj(grp_top_folder["depth"])[0]
             # depth = grp_top_folder["depth/depth"][0,0]
-            electrode_depths[i-1] = depth
-            electrode_depths[i-1] = 0.001 * depth
+            electrode_depths[i] = depth
+            electrode_depths[i] = 0.001 * depth
         except:
             if options.verbose:
                 print("Could not extract electrode_depths")
@@ -2440,7 +2463,7 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
         ug = spk_times_iface.make_group("<unit_N>", unit)
         ug.set_dataset("times", timestamps)
         ug.set_dataset("source", "Data from processed matlab file")
-        ug.set_dataset("unit_description", unit_descr)
+        ug.set_dataset("unit_description", unit_descr[i])
         # spk_times_iface.append_unit_data(unit, "trial_ids", trial_ids)
         ug.set_custom_dataset("trial_ids", trial_ids)
     spk_times_iface.set_custom_dataset("cell_types", cell_types)
@@ -2554,7 +2577,8 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
 
     vargs = {}
     session_id = os.path.basename(output_nwb)[0:-4]
-    if options.data_origin == "NL":
+    if options.data_origin in ["NL", "JY"]:
+        print "Case 1"
         vargs["start_time"] = find_exp_time(meta_h5, options)
         vargs["description"]= "Extracellular ephys recording of mouse doing discrimination " + \
                               "task (lick left/right), with optogenetic stimulation " +\
