@@ -385,8 +385,7 @@ def fetch_dff(orig_h5, dff_iface, seg_iface, plane_map, area, plane, \
     dff_ts.set_dataset("timestamps", t)
     dff_ts.set_dataset("roi_names", roi_names)
     #- dff_ts.set_value_as_link("segmentation_interface", seg_iface)
-    dff_ts.make_group("segmentation_interface", seg_iface,
-                    attrs = {"source" : "Simon's data file"})
+    dff_ts.make_group("segmentation_interface", seg_iface)
     trial_ids = area_grp["trial/trial"].value
     dff_ts.set_custom_dataset("trial_ids", trial_ids)
 
@@ -1052,11 +1051,12 @@ def create_trials(orig_h5, nwb_object, options):
                 good_trials = [int(c) for c in np.logical_and(good_trials, good_trials_units[i])]
         else:
             good_trials = [int(c) for c in np.logical_and(good_trials, good_trials_units)]
-        print "good_trials_whiskers.shape=", good_trials_whiskers.shape
-        print "good_trials_whiskers=", good_trials_whiskers
-        print "good_trials_units.shape=", good_trials_units.shape
-        print "good_trials_units=", good_trials_units
-        print "good_trials=", good_trials
+        if options.verbose:
+            print "good_trials_whiskers.shape=", good_trials_whiskers.shape
+            print "good_trials_whiskers=", good_trials_whiskers
+            print "good_trials_units.shape=", good_trials_units.shape
+            print "good_trials_units=", good_trials_units
+            print "good_trials=", good_trials
     elif options.data_origin in ["JY"]:
         ephys_value_pointer = libh5.get_value_by_key(orig_h5["/timeSeriesArrayHash"], "Ephys")
         time = np.array(libh5.get_value_pointer_by_path_items(ephys_value_pointer, ["time", "time"]))
@@ -1676,15 +1676,15 @@ def process_metadata(nwb_object, data_h5, meta_h5, options):
         general_group = set_metadata_from_file(general_group, "data_collection", "data_collection.txt")
         general_group = set_metadata_from_file(general_group, "experiment_description", "experiment_description.txt")
     elif options.data_origin == "SP":
-        general_group.set_custom_dataset("data_collection", "doi: 10.1016/j.neuron.2015.03.027")
-        general_group.set_custom_dataset("experiment_description", "doi: 10.1016/j.neuron.2015.03.027")
-        general_group.set_custom_dataset("surgery",         "doi: 10.1016/j.neuron.2015.03.027")
+        general_group.set_dataset("data_collection", "doi: 10.1016/j.neuron.2015.03.027")
+        general_group.set_dataset("experiment_description", "doi: 10.1016/j.neuron.2015.03.027")
+        general_group.set_dataset("surgery",         "doi: 10.1016/j.neuron.2015.03.027")
         general_group.set_custom_dataset("whisker_configuration", "see Table S1 in doi: 10.1016/j.neuron.2015.03.027")
         set_metadata(subject_group, "weight", "not recorded")
     elif options.data_origin == "DG":
-        general_group.set_custom_dataset("data_collection", "doi:10.1038/nn.4412")
-        general_group.set_custom_dataset("experiment_description",  meta_h5["expDescription/expDescription"].value)
-        general_group.set_custom_dataset("surgery",  meta_h5["surgicalManipulation/surgicalManipulation"].value[0])
+        general_group.set_dataset("data_collection", "doi:10.1038/nn.4412")
+        general_group.set_dataset("experiment_description",  str(meta_h5["expDescription/expDescription"].value[0]))
+        general_group.set_dataset("surgery",  meta_h5["surgicalManipulation/surgicalManipulation"].value[0])
         principal_whisker = libh5.get_value_pointer_by_path_items(data_h5, ["descrHash", "value", "value", "1"])
         general_group.set_custom_dataset("principal_whisker", principal_whisker)                    
     else:
@@ -1738,7 +1738,6 @@ def get_trial_units(orig_h5, nwb_object, unit_num, options):
             grp_name = "eventSeriesHash/value/%d" % i
         else:
             grp_name = "eventSeriesHash/value"
-        print "grp_name=", grp_name
         grp_top_folder = orig_h5[grp_name]
         trial_ids = grp_top_folder["eventTrials/eventTrials"].value
         trial_ids = Set(trial_ids)
