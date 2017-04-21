@@ -36,23 +36,15 @@ type the name of the script followed by flag "-h".
 
 Example of usage of the script mat2h5.py:
 
-    python3 mat2h5.py data_structure_ANM219247_20130921.mat
-
-(file data_structure_ANM219247_20130921.h5 will be produced)
-
+    python3 mat2h5.py <data>.mat               #   file <data>.h5     will be produced
+    python3 mat2h5.py <metadata>.mat           #   file <metadata>.h5 will be produced
 
 Examples of usage of the script make_nwb.py:
 
-- on motor cortex data:
-    make_nwb.py data_structure_ANM219248_20130921.h5  meta_data_ANM219248_20130921.h5
-
-(file data_structure_ANM219248_20130921.nwb will be produced)
-
-- on somatosensory cortex data:
-    make_nwb.py an194181_2013_01_16_data_struct.mat
-
-(file an194181_2013_01_16_data_struct.nwb will be produced)
-
+- if metadata is not included in the data file:
+    make_nwb.py  <data>.h5 <metadata>.h5      #   file <data>.nwb will be produced
+- otherwise:
+    make_nwb.py  <data>.h5                    #   file <data>.nwb will be produced    
 
 Examples of usage of the script mat2h5.py:
 - on motor cortex data:
@@ -64,6 +56,10 @@ where data_dir is a folder containing data and metadata files
 in the case of motor cortex data conversion and data files 
 in the case of somatosensory cortex data conversion.
 
-
-
+To make use of these scripts, the user must define environment variable
+NWB_DATA, which points to the full path to the root data directory.
+This directory, in particular, will contain files data_collection.txt,
+experiment_description.txt, and surgery.txt, which are used as additional metadata.
+All the other data passed to the scripts may be specified as paths ralative to this 
+root directory.
 
