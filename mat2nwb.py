@@ -1,5 +1,3 @@
-#!/usr/local/python-2.7.11/bin/python
-
 """
 mat2nwb.py     
 
@@ -25,9 +23,14 @@ python_version = str(sys.version_info.major) + "." + \
 
 print("python_version=" + str(python_version))
 
-nwb_home = os.environ['NWB_HOME']
-nwb_data = os.environ['NWB_DATA']
-nwb_temp = os.environ['NWB_TEMP']
+try:
+    nwb_home = os.environ['NWB_HOME']
+except:
+    nwb_home = ""
+try: 
+    nwb_data = os.environ['NWB_DATA']
+except:
+    nwb_data = ""
 
 # ------------------------------------------------------------------------------
 
@@ -41,7 +44,6 @@ def mat2nwb_command_line_parser(parser):
     parser.add_option("-P", "--processing_end",dest="processing_end",help="complete processing at step mat2h5 (=1) or make_*_nwb (=2)",metavar="processing_end",default=2)
     parser.add_option("-r", "--replace",   action="store_true", dest="replace", help="if the output file already exists, replace/overwrite it", default=False)
     parser.add_option("-S", "--somatosensory_cortex", action="store_true", dest="ssc", help="perform conversion of data from somatosensory cortex", default=False)
-    parser.add_option("-s", "--sub",dest="submission_command", help="source, qsub or qsub_debug", metavar="submission_command", default="qsub")
     parser.add_option("-v", "--verbose",   action="store_true", dest="verbose",  help="increase the verbosity level of output", default=False)
     parser.add_option("-w", "--overwrite",   action="store_true", dest="overwrite", help="perform processing even if output already exists", default=False)
     parser.add_option("-z", "--zmin",dest="zmin",help="min file # to be processed", metavar="zmin", default=0)
@@ -57,13 +59,11 @@ def get_input_type(input_data, options):
     input_type = ""
     print("input_data=" + str(input_data)+ " os.path.isdir(input_data)=" + str(os.path.isdir(input_data)))
     if   os.path.isfile(input_data) or \
-         os.path.isfile(os.path.join(nwb_data,input_data)) or \
-         os.path.isfile(os.path.join(nwb_temp,input_data)):
+         os.path.isfile(os.path.join(nwb_data,input_data)):
         if mimetypes.guess_type(input_data)[0] == 'text/plain':
             input_type = "fof"
     elif os.path.isdir(input_data) or \
-         os.path.isdir(os.path.join(nwb_data,input_data)) or \
-         os.path.isdir(os.path.join(nwb_temp,input_data)):
+         os.path.isdir(os.path.join(nwb_data,input_data)):     
         input_type = "dir"
     return input_type
 
@@ -79,21 +79,24 @@ def compile_file_list(input_data, input_type, options):
             for file in os.listdir(input_data):
                 if re.search(".mat", file) and \
                   ( re.search("data_structure_ANM", file)  or \
-                   (re.search("data_structure_JY",  file) and not re.search("meta", file))):
+                   (re.search("data_structure_JY",  file) and not re.search("meta", file)) or \
+                   (re.search("_data.mat", file) and not re.search("voltage", file))):
                    data_path = os.path.join(input_data, file)
-                   root_name = file.split(".")[0][18:]
-                   if re.search("data_structure_ANM", file):
+                   if re.search("data_structure_ANM", file):     # NL data
                        meta_data_path = os.path.join(input_data, "meta_data_ANM" + file[18:])
-                   else:
+                   elif re.search("data_structure_JY",  file):   # JY data
                        meta_data_path = os.path.join(input_data, "meta" + file)
+                   else:                                         # DG data
+                       meta_data_path = os.path.join(input_data, file[0:-8] + "meta.mat")
                    print ("data_path=" + data_path)
+                   print ("meta_data_path=" + meta_data_path)
+                   print ("meta_data_exists=" + str(os.path.exists(meta_data_path)))
                    if os.path.exists(meta_data_path):
-                       print ("meta_data_path=" + meta_data_path)
                        print (" ... num_files=" + str(num_files) + " zmin=" + str(options.zmin) + " zmax=" +str(options.zmax))
                        if num_files >= int(options.zmin) and num_files <= int(options.zmax):
                            file_list[0].append(data_path)
                            file_list[1].append(meta_data_path)
-                       num_files += 1
+                           num_files += 1
             print ("    len(file_list[0])=" + str(len(file_list[0])))
             print ("    len(file_list[1])=" + str(len(file_list[1])))
         elif options.ssc:
@@ -126,81 +129,48 @@ def create_array_job(outfolderpath, input_data, file_list, options):
         scr.write("#$ -t 1-" + str(len(file_list[0])) + "\n")
     else:
         scr.write("#$ -t 1-" + str(len(file_list)) + "\n")
-    command = "python " + os.path.join(nwb_data, "mat2nwb.py") + " " +\
-        os.path.join(nwb_data, str(input_data)) + \
+    command1 = ""
+    command2 = ""
+    if not int(options.processing_start) == 2:
+        command1 = "python3 " + os.path.join(nwb_data, "mat2nwb.py") 
+    if not int(options.processing_end) == 1:
+        command2 = "python  " + os.path.join(nwb_data, "mat2nwb.py")
+    opts = " " + os.path.join(nwb_data, str(input_data)) + \
         " -n $SGE_TASK_ID " + \
         " -p " + str(options.processing_start) + \
         " -P " + str(options.processing_end)   + \
-        " -o " + outfolderpath  
-    if options.verbose:
-        command += " -v "
-    if options.mc:
-        command += " -M "
-    if options.ssc:
-        command += " -S "
-    if options.debug:
-        command += " -D "
-    command += "\n"
-    scr.write(command)
+        " -o " + outfolderpath 
+
+    if len(command1) > 0:
+        command1 += opts 
+        if options.verbose:
+            command1 += " -v "
+        if options.mc:
+            command1 += " -M "
+        if options.ssc:
+            command1 += " -S "
+        if options.debug:
+            command1 += " -D "
+        command1 += "\n"
+        scr.write(command1)
+
+    if len(command2) > 0:
+        command2 += opts
+        if options.verbose:
+            command2 += " -v "
+        if options.mc:
+            command2 += " -M "
+        if options.ssc:
+            command2 += " -S "
+        if options.debug:
+            command2 += " -D "
+        command2 += "\n"
+        scr.write(command2)
+
     if not options.debug:
         scr.write("%s '%s' \n" % tuple(["rm -f ", \
                   conversion_shell_script_path]))
     scr.write("\n")
-    scr.close()
-
-    return conversion_shell_script_path
-
-# ------------------------------------------------------------------------------
-
-def create_shell_script(outfolderpath, input_data, file_list, options):
-    if options.mc:
-        conversion_shell_script_path = \
-            os.path.join(outfolderpath, "Conversion_script.mc.sh")
-    elif options.ssc:
-        conversion_shell_script_path = \
-            os.path.join(outfolderpath, "Conversion_script.ssc.sh")
-
-    scr = open(conversion_shell_script_path, 'wt')
-    scr.write("#!/usr/bash\n")
-    if options.mc:
-        for i in range(0, len(file_list[0])):
-            data_file_mat = file_list[0][i]
-            metadata_file_mat = file_list[1][i]
-            data_file_h5 = data_file_mat.split(".")[0] + ".h5"
-            metadata_file_h5 = metadata_file_mat.split(".")[0] + ".h5"
-            print ("options.processing_start=" + str(options.processing_start)+" options.processing_end=" + str(options.processing_end))
-            if options.processing_start == 1:
-                command1 = sys.executable + " " + "python3 mat2h5.py " +     data_file_mat + \
-                           " -o " + options.output_folder
-                command2 = sys.executable + " " + "python3 mat2h5.py " + metadata_file_mat + \
-                           " -o " + options.output_folder
-                if options.verbose:
-                    command1 += " -v "
-                    command2 += " -v "
-                scr.write(command1 + "\n")
-                scr.write(command2 + "\n")
-            if options.processing_end == 2:
-                command = "make_nwb.py " + data_file_h5 + " " \
-                                        + metadata_file_h5
-                command = sys.executable + " " + command
-                scr.write(command + "\n")
-    else:
-        for i in range(0, len(file_list)):
-            data_file_mat = file_list[i]
-            data_file_h5 = data_file_mat.split(".")[0] + ".h5"
-            if options.processing_start == 1:
-                command = sys.executable + " " + "python3 mat2h5.py " + data_file_mat + \
-                          " -o " + options.output_folder
-                if options.verbose:
-                    command += " -v "
-                scr.write(command + "\n")
-            if options.processing_end == 2:
-                command = "make_nwb.py " + data_file_h5
-                command = sys.executable + " " + command
-                scr.write(command + "\n")                                      
-    if not options.debug:
-        scr.write("%s '%s' \n" % tuple(["rm -f ", \
-                  conversion_shell_script_path]) + "\n")
     scr.close()
 
     return conversion_shell_script_path
@@ -214,30 +184,26 @@ def submit_job(conversion_shell_script_path, options):
         prog_name = "ssc.conv"
     command = ""
     jobid = 0
-    if re.search("qsub", options.submission_command):
-        command = base_command + " -V -N " + prog_name
-        if options.submission_command == "qsub":
-            command += " -o /dev/null -e /dev/null "
-        if len(options.project_code) > 0:
-            command += "  -A " + options.project_code
-        command += " -pe batch 2"
-        command += " " + conversion_shell_script_path
-        try:
-            res = commands.getstatusoutput(command)   # python-2
-        except:
-            res = subprocess.getstatusoutput(command) # python-3
-        jobid = (res[1].split()[2]).split(".")[0]
-        print (str(res[1])+ "\n")
-    elif not options.submission_command == "none":
-        command = "source " + conversion_shell_script_path
-        os.system(command)
+    command = base_command + " -V -N " + prog_name
+    if not options.debug:
+        command += " -o /dev/null -e /dev/null "
+    if len(options.project_code) > 0:
+        command += "  -A " + options.project_code
+    command += " -pe batch 2"
+    command += " " + conversion_shell_script_path
+    try:
+        res = commands.getstatusoutput(command)   # python-2
+    except:
+        res = subprocess.getstatusoutput(command) # python-3
+    jobid = (res[1].split()[2]).split(".")[0]
+    print (str(res[1])+ "\n")
     if options.verbose:
         print ("Submit conversion job command=" + command)
     return jobid
 
 # ------------------------------------------------------------------------------
 
-def produce_nwb_high_level(input_data, input_type, options):
+def high_level_processing(input_data, input_type, options):
     # Create a list of files to be processed 
     file_list = compile_file_list(input_data, input_type, options)
     if options.verbose:
@@ -268,12 +234,8 @@ def produce_nwb_high_level(input_data, input_type, options):
     if options.mc and len(file_list[0]) == 0:
         sys.exit("No valid input data found. Please, check your input")
 
-    if re.search("qsub", options.submission_command):
-        conversion_shell_script_path = \
-            create_array_job(outfolderpath, input_data, file_list, options)
-    else:
-        conversion_shell_script_path = \
-            create_shell_script(outfolderpath, input_data, file_list, options)
+    conversion_shell_script_path = \
+        create_array_job(outfolderpath, input_data, file_list, options)
     if options.verbose:
         print ("conversion_shell_script_path=" + str(conversion_shell_script_path))
   
@@ -281,11 +243,14 @@ def produce_nwb_high_level(input_data, input_type, options):
 
 # ------------------------------------------------------------------------------
 
-def produce_nwb_low_level(input_data, input_type, options):
-    print ("... Enter produce_nwb_low_level; options.mc=" + str(options.mc) + " options.ssc=" + str(options.ssc)+ " options.processing_start=" + 
+def low_level_processing(input_data, input_type, options):
+    print ("... Enter low_level_processing; options.mc=" + str(options.mc) + " options.ssc=" + str(options.ssc)+ " options.processing_start=" + 
           str(options.processing_start))
     file_list = compile_file_list(input_data, input_type, options)
     node = int(options.node)
+    if options.verbose:
+        print ("node=", options.node)
+        print ("file_list=", str(file_list))
     if options.mc:
         data_file      = file_list[0][node - 1]
         meta_data_file = file_list[1][node - 1]
@@ -365,9 +330,9 @@ if __name__ == "__main__":
         if options.verbose:
             print ("options.node=" + str(options.node))
         if int(options.node) == 0:
-            produce_nwb_high_level(input_data, input_type, options)
+            high_level_processing(input_data, input_type, options)
         else:
-            produce_nwb_low_level(input_data, input_type, options)
+            low_level_processing(input_data, input_type, options)
     else:
         parser.print_usage()
         sys.exit(2)
