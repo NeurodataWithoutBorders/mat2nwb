@@ -542,7 +542,7 @@ def process_pole_position(orig_h5, nwb_object, options):
         t = time + trial_start_times
         description = libh5.get_description_by_key(hash_group_pointer, keyName1)
         group_attrs = {"source": source, "description" : description}
-        data_attrs  = {"resolution":0.1,"conversion":1.0} 
+        data_attrs  = {"resolution":0.1,"unit":"unknown", "conversion":1.0} 
         pole_in  = create_time_series("pole_in", "<TimeSeries>", series_path,\
                        orig_h5, nwb_object, group_attrs, '', t, data_attrs, \
                        hash_group_pointer, keyName1, options)
@@ -2352,8 +2352,10 @@ def process_laser_and_aom_input_data(orig_h5, meta_h5, nwb_object, options):
                                                  "photostimulus_" + str(trace_types[s]), \
                                                  path = "/stimulus/presentation",\
                                                  attrs = group_attrs, abort=False)
-                 # Create the site_### dataset
-                ts_group.set_custom_dataset("site", \
+                # Create the site_### dataset
+                if options.verbose:
+                    print "Creating photostimulus site dataset: ccord=", coord, " loc=", loc
+                ts_group.set_dataset("site", \
                                             coord + " in mm\natlas location: " + loc)
 
             except:
