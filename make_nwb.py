@@ -2234,16 +2234,15 @@ def process_extracellular_ephys_data(nwb_object, orig_h5, meta_h5, options):
     # Store the external voltage file name
     fname = " "
     if options.data_origin == "NL":
-        et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
-             attrs = {"description" : "File containing the raw voltage data for this session",
-                      "source" : " "})
+        et = nwb_object.make_custom_group("extracellular_traces", path = "/acquisition/timeseries", \
+             attrs = {"source" : " ", \
+                      "description" : "File containing the raw voltage data for this session"})
         fname = "voltage_filename" + os.path.basename(options.data_path)[13:-3] + ".mat"
     elif options.data_origin == "DG":
         description = orig_h5["descrHash/descr/descr"].value[0]
         source      = "Diego's data file"
-        et = nwb_object.make_group("<TimeSeries>", "extracellular_traces", path = "/acquisition/timeseries", \
+        et = nwb_object.make_custom_group("extracellular_traces", path = "/acquisition/timeseries", \
              attrs = {"description" : description, "source" : source })
-#       fname = "voltageTraces_" + os.path.basename(options.data_path)[0:-3] + ".mat"
         fname = orig_h5["descrHash/value/value"][0]
     et.set_custom_dataset("ephys_raw_data", fname)
     
@@ -2579,7 +2578,6 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     vargs = {}
     session_id = os.path.basename(output_nwb)[0:-4]
     if options.data_origin in ["NL", "JY"]:
-        print "Case 1"
         vargs["start_time"] = find_exp_time(meta_h5, options)
         vargs["description"]= "Extracellular ephys recording of mouse doing discrimination " + \
                               "task (lick left/right), with optogenetic stimulation " +\
