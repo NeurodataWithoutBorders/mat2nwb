@@ -275,14 +275,14 @@ def update_reference_images(orig_h5, nwb_object, master_shape, \
            "x" + str(master1_shape[1]) + ", 8bit"
     nwb_object.set_dataset("<image_X>", green.astype('uint8'), name=name,\
                            dtype='uint8', attrs={"description":desc, \
-                           "format": fmt})
+                           "format": fmt, "source" : " "})
 
     name = image_plane + "_red"
     desc = "Master image (red channel), in " + str(master1_shape[0]) + \
            "x" + str(master1_shape[1]) + ", 8bit"
     nwb_object.set_dataset("<image_X>", red.astype('uint8'), name=name, \
                            dtype='uint8', attrs={"description":desc, \
-                           "format": fmt})
+                           "format": fmt, "source" : " "})
 
     # Use the green ref image as reference frame in /general/optophysiology/fov_xx
     general_group  = nwb_object.make_group("general", abort=False)
@@ -589,7 +589,6 @@ def process_licks(orig_h5, nwb_object, options):
         description = libh5.get_description_by_key(hash_group_pointer, keyName1)
         grp = libh5.get_value_by_key(hash_group_pointer, keyName1)
         t = grp["eventTimes/eventTimes"].value * 0.001
-        print("In processing licks: len(t)=" + str(len(t)))
         data_attrs = {"description": description, \
                       "source": "Times as reported in Simon's data file",
                       "unit":"licks", "conversion": 1.0, "resolution": 1.0}
@@ -2393,9 +2392,9 @@ def process_extracellular_spike_time(orig_h5, meta_h5, nwb_object, options):
 
     # create interfaces
     spk_waves_iface = mod.make_group("EventWaveform")                
-    spk_waves_iface.set_attr("source", "Data as reported in Nuo's file")
+    spk_waves_iface.set_attr("source", "EventWaveform in this module")   
     spk_times_iface = mod.make_group("UnitTimes")  
-    spk_times_iface.set_attr("source", "EventWaveform in this module")
+    spk_times_iface.set_attr("source", "UnitTimes in this module")
           
     # top level folder
     unit_descr = unit_descr = np.array(parse_h5_obj(orig_h5['eventSeriesHash/descr/descr'])[0]).tolist()
@@ -2556,11 +2555,16 @@ def set_data_origin(orig_h5, meta_h5, options):
 #ep.ts_self_check()
 #sys.exit(0)
 def produce_nwb(data_path, metadata_path, output_nwb, options):
-    orig_h5 = h5py.File(data_path, "r")
+    try:
+        orig_h5 = h5py.File(data_path, "r")
+    except:
+        sys.error("Cannot open data " + data_path)
     meta_h5 = ""
     if len(metadata_path) > 0:
-        meta_h5 = h5py.File(metadata_path, "r")
-
+        try:
+            meta_h5 = h5py.File(metadata_path, "r")
+        except:
+            sys.error("Cannot open metadata " + metadata_path)
     options = set_data_origin(orig_h5, meta_h5, options)
 
     check_keys(orig_h5, meta_h5, options)              
@@ -2589,7 +2593,7 @@ def produce_nwb(data_path, metadata_path, output_nwb, options):
     else:
         vargs["start_time"] = find_exp_time(orig_h5, options)
         vargs["description"]= "Experiment description (to be added)"
-        print("Missing experioment description ")
+        print("Missing experiment description ")
     vargs["file_name"]      = output_nwb
     vargs["identifier"]     = nwb_utils.create_identifier(session_id)                              
     vargs["mode"] = "w"
