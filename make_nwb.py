@@ -1875,12 +1875,14 @@ def add_ref_images_to_image_segmentation(seg_iface, plane_map, \
         plane = plane_map[k]
         try:
             img = ref_image_red[plane]
-            nwb_utils.add_reference_image(seg_iface, plane, "%s_0002"%plane, img)
+            source = "%s - red" % k  # k will be like 'area9_plane1'
+            nwb_utils.add_reference_image(seg_iface, plane, "%s_0002"%plane, img, source)
         except:
             print("Cannot store red reference image")
         try:
             img = ref_image_green[plane]
-            nwb_utils.add_reference_image(seg_iface, plane, "%s_0001"%plane, img)
+            source = "%s - green" % k  # k will be like 'area9_plane1'
+            nwb_utils.add_reference_image(seg_iface, plane, "%s_0001"%plane, img, source)
         except:
             print("Cannot store green reference image")
 
